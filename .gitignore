@@ -1,0 +1,11 @@
+## --------------------------------
+## Simple .gitignore for Macrograd
+## --------------------------------
+
+# Build Outputs
+lib/
+bin/
+.intermediate/
+
+# VisualStudid
+.vs/
