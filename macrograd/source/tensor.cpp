@@ -206,7 +206,7 @@ void Tensor::zero_grad()
 	}
 	// Zero the gradient on the CPU.
 	else
-		memset(_data->gradient->_data->array._data, 0, _data->array._total_size * sizeof(float));
+		memset(_data->gradient->_data->array._data, 0, _data->array._data_size);
 }
 
 Tensor& Tensor::internal_gradient()

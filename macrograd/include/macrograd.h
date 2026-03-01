@@ -73,13 +73,13 @@ public:
 	const float* get_vector(unsigned* route, int idx0, int idx1) const;
 	float* get_vector(unsigned* route, int idx0, int idx1);
 
-	float*			data()				{ return _data; }
-	const float*	data() const		{ return _data; }
-	unsigned		dim() const			{ return _shape.dim(); }
-	unsigned		size(int dim) const	{ return _shape[dim]; }
-	unsigned		data_size() const	{ return sizeof(float) * _total_size; }
-	const Shape&	shape() const		{ return _shape; }
-	const Shape&	offset() const		{ return _offset; }
+	float*			data()				{ return _data;			}
+	const float*	data() const		{ return _data;			}
+	unsigned		dim() const			{ return _shape.dim();	}
+	unsigned		size(int dim) const	{ return _shape[dim];	}
+	unsigned		numel() const		{ return _numel;		}
+	const Shape&	shape() const		{ return _shape;		}
+	const Shape&	offset() const		{ return _offset;		}
 
 private:
 	Shape _shape;	// Stores the array's shape.
@@ -87,7 +87,8 @@ private:
 	float* _data = nullptr;		// Pointer to the internal array values.
 
 	Shape _offset;				// Vector holding offset information of the data.
-	unsigned _total_size = 0u;	// Total size of the data pointer.
+	unsigned _numel = 0u;		// Total number of element in the array.
+	unsigned _data_size = 0u;	// Total byte size of the array data.
 };
 
 class Tensor
@@ -118,9 +119,10 @@ public:
 
 	// --- Quality of life ---
 
-	unsigned dim()			const { return _view.dim(); }
-	unsigned size(int dim)	const { return _view[dim]; }
-	const Shape& shape()	const { return _view; }
+	unsigned numel()		const { return array().numel(); }
+	unsigned dim()			const { return _view.dim();		}
+	unsigned size(int dim)	const { return _view[dim];		}
+	const Shape& shape()	const { return _view;			}
 	const char* str()		const;
 	const char* device()	const;
 private:
@@ -204,19 +206,19 @@ public:
 	Tensor& operator=(const Tensor& other);
 
 	Tensor view(const Shape& shape) const;		// Creates a new tensor with the same data but different view.
+	Tensor flatten() const;						// Returns a tensor with the same data reduced to a single vector.
 	Tensor squeeze(int dim) const;				// Returns a tensor with the specified dimension removed from view, must be 1.
 	Tensor unsqueeze(int dim) const;			// Returns a tensor with an added dimension 1 in view, in the specified spot.
 
 	// --- Shape operators ---
 
-	Tensor flatten() const;												// Returns a tensor with the same data reduced to a single vector.
-	Tensor contiguous() const;											// If offsets are not properly aligned it creates a new tensor reshaped, else returns itself.
-	Tensor transpose(int dim0, int dim1) const;							// Returns a tensor with the specified dimensions transposed.
-	Tensor reshape(const Shape& shape) const;							// Returns a tensor reshaped from to the specified dimensions if possible.
-	Tensor subset(const Shape& shape, int* start_indices) const;		// Returns a subset of the tensor with the specified shape starting from the specified indices.
-	Tensor modified(int* start_indices, const Tensor& other) const;		// Returns a tensor with the same shape but with a subset substituted by the specified tensor.
-	Tensor repeat(int dim, unsigned repetitions) const;					// Returns a tensor with repeated dimensions of out_shape = shape * repetitions.
-	Tensor copy(const char* device = "cpu", bool grad = false) const;	// Returns an exact copy of the tensor. This includes operator data and gradient if exist.
+
+	Tensor transpose(int dim0, int dim1) const;								// Returns a tensor with the specified dimensions transposed.
+	Tensor reshape(const Shape& shape) const;								// Returns a tensor reshaped from to the specified dimensions if possible.
+	Tensor subset(const Shape& shape, const Shape& start_indices) const;	// Returns a subset of the tensor with the specified shape starting from the specified indices.
+	Tensor modify(const Tensor& other, const Shape& start_indices) const;	// Returns a tensor with the same shape but with a subset substituted by the specified tensor.
+	Tensor repeat(int dim, unsigned repetitions) const;						// Returns a tensor with repeated dimensions of out_shape = shape * repetitions.
+	Tensor copy(const char* device = "cpu", bool grad = false) const;		// Returns an exact copy of the tensor. This includes This includes array, view and gradient if exist. and gradient if exist.
 
 	// --- Functions ---
 

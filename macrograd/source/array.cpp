@@ -144,21 +144,22 @@ const char* Shape::str(const char* fmt) const
 
 Array& Array::operator=(const Array& other)
 {
-	if (dim())
+	if (_data)
 		::operator delete[](_data, std::align_val_t(64));
 
-	_shape = other.shape();
-	if (!dim())
+	_shape		= other._shape;
+	_offset		= other._offset;
+	_data_size	= other._data_size;
+	_numel		= other._numel;
+
+	if (!_shape.dim())
 	{
 		_data = nullptr;
-		_total_size = 0u;
 		return *this;
 	}
 
-	_offset = other._offset;
-	_total_size = other._total_size;
-	_data = (float*)::operator new[](_total_size * sizeof(float), std::align_val_t(64));
-	memcpy(_data, other._data, _total_size * sizeof(float));
+	_data = (float*)::operator new[](_data_size, std::align_val_t(64));
+	memcpy(_data, other._data, _data_size);
 
 	return *this;
 }
@@ -173,35 +174,34 @@ void Array::create(const Shape& shape)
 			"A shape with negative values is not allowed for initialization."
 		);
 
-	if (dim())
+	if (_data)
 		::operator delete[](_data, std::align_val_t(64));
 
 	_shape = shape;
 	_offset = shape;
 
-	// Set offsets with 64 bit alignment.
-	_offset[dim() - 1] = 1u;
+	// Set offsets to size * offset of previous dimension.
+	_offset[-1] = 1u;
 	for (int i = dim() - 2; i >= 0; i--)
-	{
 		_offset[i] = shape[i + 1] * _offset[i + 1];
-		if (_offset[i] % 16 != 0 && shape[i + 1] != 1u)
-			_offset[i] += 16 - _offset[i] % 16;
-	}
 
-	// Get the total size needed given the alignment.
-	_total_size = _offset[0] * shape[0];
-	if (_total_size % 16 != 0)
-		_total_size += 16 - _total_size % 16;
+	// Get the total number of elements.
+	_numel = _offset[0] * shape[0];
+
+	// Get the total data size 64-byte aligned.
+	_data_size = _numel * sizeof(float);
+	if (_data_size % 64 != 0)
+		_data_size += 64 - _data_size % 64;
 
 	// Set offsets to 0 for unitary dimensions.
 	for (unsigned i = 0; i < dim(); i++)
 		if (_shape[i] == 1) _offset[i] = 0;
 
 	// Allocate the data.
-	_data = (float*)::operator new[](_total_size * sizeof(float), std::align_val_t(64));
+	_data = (float*)::operator new[](_data_size, std::align_val_t(64));
 
 	// Be clean and zero it out.
-	memset(_data, 0, _total_size * sizeof(float));
+	memset(_data, 0, _data_size);
 }
 
 Array::~Array()
@@ -317,7 +317,7 @@ void Array::set_value(const Shape& idxs, float value)
 	TENSOR_CHECK(_data,
 		"Trying to set a value on an empty array."
 	);
-	TENSOR_CHECK(_total_size,
+	TENSOR_CHECK(_numel,
 		"Trying to set a value on an array with no values.\n"
 		"The array shape is %s", _shape.str()
 	);
@@ -339,7 +339,7 @@ float Array::get_value(const Shape& idxs) const
 	TENSOR_CHECK(_data,
 		"Trying to get a value on an empty array."
 	);
-	TENSOR_CHECK(_total_size,
+	TENSOR_CHECK(_numel,
 		"Trying to get a value on an array with no values.\n"
 		"The array shape is %s", _shape.str()
 	);
