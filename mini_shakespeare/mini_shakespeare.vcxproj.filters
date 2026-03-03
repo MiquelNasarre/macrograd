@@ -17,5 +17,13 @@
     <ClCompile Include="source\main.cpp">
       <Filter>Sources\Private</Filter>
     </ClCompile>
+    <ClCompile Include="source\MNIST.cpp">
+      <Filter>Sources\Private</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\MNIST.h">
+      <Filter>Sources\Public</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

@@ -9,3 +9,6 @@ bin/
 
 # VisualStudid
 .vs/
+
+# Big data blobs
+data/

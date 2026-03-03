@@ -107,7 +107,7 @@
     <ClInclude Include="include\macrograd_nn.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="source\array.cpp" />
+    <ClCompile Include="nn.cpp" />
     <ClCompile Include="source\tensor.cpp" />
     <ClCompile Include="source\tensor_ops.cpp" />
   </ItemGroup>

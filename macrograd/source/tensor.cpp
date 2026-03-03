@@ -5,6 +5,142 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <new>
+
+/*
+--------------------------------------------------------------------------------------------------------------------------
+ Shape functions
+--------------------------------------------------------------------------------------------------------------------------
+*/
+
+Shape::Shape(unsigned dim, int* sizes) : _dim{ dim }
+{
+	if (!dim)
+		return;
+
+	_sizes = new int[dim];
+
+	if (sizes)
+		for (unsigned i = 0; i < dim; i++)
+			_sizes[i] = sizes[i];
+	else
+		for (unsigned i = 0; i < dim; i++)
+			_sizes[i] = 0;
+}
+
+Shape& Shape::operator=(const Shape& other)
+{
+	if (_dim == other._dim)
+	{
+		for (unsigned i = 0; i < _dim; i++)
+			_sizes[i] = other._sizes[i];
+		return *this;
+	}
+
+	if (_sizes)
+	{
+		delete[] _sizes;
+		_sizes = nullptr;
+	}
+
+	_dim = other._dim;
+	if (!_dim)
+		return *this;
+
+	_sizes = new int[other._dim];
+	for (unsigned i = 0; i < other._dim; i++)
+		_sizes[i] = other._sizes[i];
+
+	return *this;
+}
+
+void Shape::remove(int dim)
+{
+	if (!_dim)
+		return;
+
+	if (_dim == 1)
+	{
+		delete[] _sizes;
+		_sizes = nullptr;
+		_dim = 0;
+		return;
+	}
+
+	// Modulo dim.
+	dim = mod(dim, _dim);
+
+	// Write new sizes.
+	int* new_sizes = new int[_dim - 1];
+
+	for (int i = 0; i < dim; i++)
+		new_sizes[i] = _sizes[i];
+	for (unsigned i = dim + 1; i < _dim; i++)
+		new_sizes[i - 1] = _sizes[i];
+
+	// Adopt new sizes.
+	_dim--;
+	delete[] _sizes;
+	_sizes = new_sizes;
+}
+
+void Shape::add(int dim, int size)
+{
+	if (!_dim)
+	{
+		_dim = 1;
+		_sizes = new int[1];
+		_sizes[0] = size;
+		return;
+	}
+
+	// Modulo dim.
+	dim = mod(dim, _dim + 1);
+
+	// Write new sizes.
+	int* new_sizes = new int[_dim + 1];
+
+	for (int i = 0; i < dim; i++)
+		new_sizes[i] = _sizes[i];
+	new_sizes[dim] = size;
+	for (unsigned i = dim; i < _dim; i++)
+		new_sizes[i + 1] = _sizes[i];
+
+	// Adopt new sizes.
+	_dim++;
+	delete[] _sizes;
+	_sizes = new_sizes;
+}
+
+const char* Shape::str(const char* fmt) const
+{
+	thread_local static char buffer[16][256] = {};
+	thread_local static int next = 0;
+
+	char* buf = buffer[(next++) % 16];
+	int left = 64;
+
+	*(buf++) = '('; left--;
+
+	for (unsigned i = 0; i < _dim && left > 0; i++)
+	{
+		int added = snprintf(buf, left, fmt, _sizes[i]);
+		buf += added, left -= added;
+
+		if (i < _dim - 1 && left > 2)
+		{
+			*(buf++) = ','; left--;
+			*(buf++) = ' '; left--;
+		}
+	}
+	if (left > 1)
+	{
+		*(buf++) = ')'; left--;
+		*(buf++) = '\0'; left--;
+	}
+
+	return buffer[(next - 1) % 16];
+}
 
 /*
 --------------------------------------------------------------------------------------------------------------------------
@@ -14,70 +150,65 @@
 
 Tensor::Tensor(const Tensor& other)
 {
-	if (other._data)
+	if (other._internals)
 	{
-		_data = other._data;
-		_data->instances++;
+		_internals = other._internals;
+		_internals->instances++;
 
 		_view = other._view;
-		_offset = other._offset;
+		_stride = other._stride;
 		_is_no_grad = other._is_no_grad;
 	}
 }
 
-Tensor::Tensor(const Array& array, const char* device, bool requires_grad)
-{
-	_data = new TensorInternals;
-	_data->instances++;
-
-	snprintf(_data->device, sizeof(_data->device), "%s", device);
-
-	if (!strcmp(device, "cpu"))
-	{
-		_data->is_gpu = false;
-		_data->array = array;
-
-		_view = array._shape;
-		_offset = array._offset;
-	}
-	else if (!strcmp(device, "cuda"))
-	{
-		_data->is_gpu = true;
-
-		TENSOR_ERROR("CUDA backend is not implemented yet.");
-	}
-	else TENSOR_ERROR(
-		"Unknown device string found \"%s\".\n"
-		"Supported devices are \"cpu\" and \"cuda\".",
-		device
-	);
-
-	if (requires_grad)
-		_data->gradient = new Tensor(array.shape(), device, false);
-}
-
 Tensor::Tensor(const Shape& shape, const char* device, bool requires_grad)
 {
-	TENSOR_CHECK(shape._dim, 
+	TENSOR_CHECK(shape.dim(),
 		"If the tensor created will have zero dimensions please use the default constructor."
 	);
+	for (unsigned i = 0; i < shape.dim(); i++)
+		TENSOR_CHECK(shape[i] >= 0,
+			"A shape with negative values is not allowed for initialization."
+		);
 
-	_data = new TensorInternals;
-	_data->instances++;
+	_internals = new TensorInternals;
+	_internals->instances++;
 
-	snprintf(_data->device, sizeof(_data->device), "%s", device);
+	snprintf(_internals->device, sizeof(_internals->device), "%s", device);
 
 	if (!strcmp(device, "cpu"))
 	{
-		_data->is_gpu = false;
-		_data->array.create(shape);
+		_internals->is_gpu = false;
 
 		_view = shape;
-		_offset = _data->array._offset;
+		_stride = shape;
+
+		// Set offsets to size * offset of previous dimension.
+		_stride[-1] = 1u;
+		for (int i = shape.dim() - 2; i >= 0; i--)
+			_stride[i] = shape[i + 1] * _stride[i + 1];
+
+		// Get the total number of elements.
+		_internals->_numel = _stride[0] * shape[0];
+
+		// Get the total data size 64-byte aligned.
+		_internals->_data_size = _internals->_numel * sizeof(float);
+		if (_internals->_data_size % 64 != 0)
+			_internals->_data_size += 64 - _internals->_data_size % 64;
+
+		// Set offsets to 0 for unitary dimensions.
+		for (unsigned i = 0; i < shape.dim(); i++)
+			if (_view[i] == 1) _stride[i] = 0;
+
+		// Allocate the data.
+		_internals->_data = (float*)::operator new[](_internals->_data_size, std::align_val_t(64));
+
+		// Be clean and zero it out.
+		memset(_internals->_data, 0, _internals->_data_size);
 	}
 	else if (!strcmp(device, "cuda"))
 	{
-		_data->is_gpu = true;
+		_internals->is_gpu = true;
 
 		TENSOR_ERROR("CUDA backend is not implemented yet.");
 	}
@@ -88,7 +219,7 @@ Tensor::Tensor(const Shape& shape, const char* device, bool requires_grad)
 	);
 
 	if (requires_grad)
-		_data->gradient = new Tensor(shape, device, false);
+		_internals->gradient = new Tensor(shape, device, false);
 }
 
 // Reduces the instance count by one.
@@ -104,19 +235,22 @@ Tensor::~Tensor()
 --------------------------------------------------------------------------------------------------------------------------
 */
 
-const Array& Tensor::array() const
+float Tensor::item() const
 {
-	TENSOR_CHECK(_data,
-		"Trying to get the array on an empty tensor is not allowed."
+	TENSOR_CHECK(_internals,
+		"Trying to call item on an empty tensor is not allowed."
+	);
+	TENSOR_CHECK(numel() == 1,
+		"Trying to call item on a tensor with %s elements.\n"
+		"Item can only be called on single element tensors.", numel()
 	);
 
-	// Return internal array.
-	return _data->array;
+	return _internals->_data[0];
 }
 
 const char* Tensor::str() const
 {
-	TENSOR_CHECK(_data,
+	TENSOR_CHECK(_internals,
 		"Trying to get the string of an empty tensor is not allowed"
 	);
 
@@ -133,32 +267,128 @@ const char* Tensor::str() const
 		shape().str(), 
 		get_operator(),
 		has_grad() ? "\n" : "",
-		has_grad() ? gradient().array().str() : "None",
-		array().str()
+		has_grad() ? gradient().array_str() : "None",
+		array_str()
 	);
 
 	return buffer[(next++) % 8];
 }
 
+const char* Tensor::array_str(const char* fmt) const
+{
+	constexpr unsigned truncation_size = 7;
+	constexpr unsigned truncation_count = 3;
+
+	thread_local static char buffer[8][4096] = {};
+	thread_local static int next = 0;
+
+	char* buf = buffer[(next++) % 8];
+	int left = 4096;
+
+	auto s_print = [&](const char* fmt, ...)
+		{
+			va_list ap;
+			va_start(ap, fmt);
+			int added = vsnprintf(buf, left, fmt, ap);
+			va_end(ap);
+			buf += added, left -= added;
+		};
+
+	Shape counting_shape(_view.dim(), (int*)nullptr);
+
+	while (left > 0)
+	{
+		for (unsigned d = 0; d < dim(); d++)
+		{
+			bool opening = true;
+			for (unsigned i = d; i < dim(); i++)
+				if (counting_shape[i]) opening = false;
+
+			if (opening)
+			{
+				if (_view[d] <= 1 || d == 0)
+					s_print("(");
+				else
+					s_print("\n(");
+			}
+		}
+
+		unsigned idx = 0;
+		for (unsigned d = 0; d < dim(); d++)
+			idx += counting_shape[d] * _stride[d];
+
+		s_print(fmt, _internals->_data[idx]);
+
+		if (++counting_shape[-1] < _view[-1])
+		{
+			s_print(", ");
+			if (_view[-1] > truncation_size && counting_shape[-1] == truncation_count)
+			{
+				counting_shape[-1] = _view[-1] - truncation_count;
+				s_print("..., ");
+			}
+		}
+
+
+		for (int d = dim() - 1; d > 0; d--)
+		{
+			if (counting_shape[d] >= _view[d])
+			{
+				counting_shape[d] -= _view[d];
+
+				if (++counting_shape[d - 1] < _view[d - 1])
+				{
+					s_print("), ");
+					if (_view[d - 1] > truncation_size && counting_shape[d - 1] == truncation_count)
+					{
+						counting_shape[d - 1] = _view[d - 1] - truncation_count;
+
+						if (_view[d] <= 1)
+							s_print("..., ");
+						else
+							s_print("\n ... ");
+					}
+				}
+				else
+				{
+					if (_view[d] <= 1)
+						s_print(")");
+					else
+						s_print(")\n");
+				}
+
+			}
+		}
+
+		if (counting_shape[0] >= _view[0])
+		{
+			s_print(")");
+			break;
+		}
+	}
+
+	return buffer[(next - 1) % 8];
+}
+
 const char* Tensor::device() const
 {
-	TENSOR_CHECK(_data,
+	TENSOR_CHECK(_internals,
 		"Trying to get the device on an empty tensor is not allowed."
 	);
 
 	// Return internal device string.
-	return _data->device;
+	return _internals->device;
 }
 
 bool Tensor::has_grad() const
 {
-	return _data && !_is_no_grad && _data->gradient != nullptr;
+	return _internals && !_is_no_grad && _internals->gradient != nullptr;
 }
 
 void Tensor::backward()
 {
 	// Sanity checks.
-	TENSOR_CHECK(_data,
+	TENSOR_CHECK(_internals,
 		"Trying to call backwards on an empty tensor."
 	);
 	TENSOR_CHECK(has_grad(),
@@ -173,12 +403,12 @@ void Tensor::backward()
 		);
 
 	// First set your gradient to 1.
-	if (_data->is_gpu)
+	if (_internals->is_gpu)
 	{
 		TENSOR_ERROR("CUDA backend is not implemented yet.");
 	}
 	else
-		((float*)_data->gradient->_data->array._data)[0] = 1.f;
+		((float*)_internals->gradient->_internals->_data)[0] = 1.f;
 
 	// Create the topological graph.
 	Tensor** list = nullptr;
@@ -188,8 +418,8 @@ void Tensor::backward()
 	// Backprop and reset list.
 	for (unsigned i = 0; i < count; i++)
 	{
-		list[i]->_data->added_to_backward = false;
-		list[i]->_data->op->_backward();
+		list[i]->_internals->added_to_backward = false;
+		list[i]->_internals->op->_backward();
 	}
 }
 
@@ -200,34 +430,19 @@ void Tensor::zero_grad()
 		return;
 
 	// Do changes on GPU tensors.
-	if (_data->is_gpu)
+	if (_internals->is_gpu)
 	{
 		TENSOR_ERROR("CUDA backend is not implemented yet.");
 	}
 	// Zero the gradient on the CPU.
 	else
-		memset(_data->gradient->_data->array._data, 0, _data->array._data_size);
-}
-
-Tensor& Tensor::internal_gradient()
-{
-	// Sanity checks.
-	TENSOR_CHECK(has_grad(),
-		"Trying to get the gradient on an tensor with no gradient is not allowed."
-	);
-
-	// Set the gradient view and offsets to your own.
-	_data->gradient->_view = _view;
-	_data->gradient->_offset = _offset;
-
-	// Return reference to its gradient tensor.
-	return *_data->gradient;
+		memset(_internals->gradient->_internals->_data, 0, _internals->_data_size);
 }
 
 const char* Tensor::get_operator() const
 {
-	if (_data && _data->op) 
-		return _data->op->_type;
+	if (_internals && _internals->op)
+		return _internals->op->_type;
 
 	return "None";
 }
@@ -240,11 +455,11 @@ const Tensor& Tensor::gradient() const
 	);
 
 	// Set the gradient view and offsets to your own.
-	_data->gradient->_view = _view;
-	_data->gradient->_offset = _offset;
+	_internals->gradient->_view = _view;
+	_internals->gradient->_stride = _stride;
 
 	// Return reference to its gradient tensor.
-	return *_data->gradient;
+	return *_internals->gradient;
 }
 
 // Returns a tensor with the same data but that says it has no gradient, this helps to 
@@ -273,30 +488,32 @@ Tensor Tensor::no_grad() const
 void Tensor::reduce_instances_count()
 {
 	// Sanity check.
-	if (!_data) return;
+	if (!_internals) return;
 
 	// Reduce the count.
-	_data->instances--;
+	_internals->instances--;
 
 	// If no more instances delete everything.
-	if (!_data->instances)
+	if (!_internals->instances)
 	{
 		// If GPU I'll deal with it when implementig backend.
-		if (_data->is_gpu)
+		if (_internals->is_gpu)
 		{
 			TENSOR_ERROR("CUDA backend not implemented yet.");
 		}
 		// If CPU tensor simply delete all memory stored in data.
 		else
 		{
-			if (_data->op)
-				delete _data->op;
+			::operator delete[](_internals->_data, std::align_val_t(64));
 
-			if (_data->gradient)
-				delete _data->gradient;
+			if (_internals->op)
+				delete _internals->op;
+
+			if (_internals->gradient)
+				delete _internals->gradient;
 		}
 		// Delete the struct itself.
-		delete _data;
+		delete _internals;
 	}
 }
 
@@ -306,11 +523,11 @@ void Tensor::add_to_backward_list(Tensor*** p_list, unsigned* count)
 {
 	// Only add to the list if the tensor
 	// can backpropagate, this ensures grad too.
-	if (!_data->op || _data->added_to_backward)
+	if (!_internals->op || _internals->added_to_backward)
 		return;
 
 	// Add relatives to the list first.
-	for (Tensor* t : _data->op->_relatives)
+	for (Tensor* t : _internals->op->_relatives)
 		if (t) t->add_to_backward_list(p_list, count);
 
 	// Add yourself at the front of the list and increase count.
@@ -323,5 +540,5 @@ void Tensor::add_to_backward_list(Tensor*** p_list, unsigned* count)
 		delete* p_list;
 	*p_list = new_list;
 	(*count)++;
-	_data->added_to_backward = true;
+	_internals->added_to_backward = true;
 }

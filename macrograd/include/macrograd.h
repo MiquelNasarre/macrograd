@@ -2,12 +2,11 @@
 
 class Shape
 {
-	friend class Array;
-	friend class Tensor;
 private:
-	unsigned _dim = 0u;			// Stores the number of dimensions.
-	int* _sizes = nullptr;		// Stores the size of the dimensions.
+	unsigned _dim = 0u;		// Stores the number of dimensions.
+	int* _sizes = nullptr;	// Stores the size of the dimensions.
 
+	static inline int mod(int a, int b) { return ((a % b) + b) % b; }
 public:
 	Shape() = default;
 	Shape(const Shape& other) { *this = other; }
@@ -23,11 +22,10 @@ public:
 	}
 
 	Shape& operator=(const Shape& other);
-
 	~Shape() { if (_sizes) delete[] _sizes; }
 
-	int& operator[](int dim)				{ return _sizes[unsigned(dim + _dim * (2 - dim / int(_dim))) % _dim]; }
-	const int& operator[](int dim) const	{ return _sizes[unsigned(dim + _dim * (2 - dim / int(_dim))) % _dim]; }
+	int& operator[](int dim)				{ return _sizes[mod(dim, _dim)]; }
+	const int& operator[](int dim) const	{ return _sizes[mod(dim, _dim)]; }
 
 	void remove(int dim);
 	void add(int dim, int size);
@@ -36,75 +34,48 @@ public:
 	const char* str(const char* fmt = "%i") const;
 };
 
-// Array class, for easy creation and modification of arrays. Since tensors carry a lot of 
-// baggage for taking care of all its operations, arrays are made to provide easy manipulation 
-// of data without worrying about gradients or in-place modifications. They can also be used 
-// to initialize tensors.
-class Array
+class Tensor;
+namespace Functional
 {
-	friend class Tensor;
-public:
-	// Performs a full copy of the other array contents.
-	Array& operator=(const Array& other);
+	Tensor matmul(const Tensor& mat0, const Tensor& mat1);
+	Tensor matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& bias);
+	Tensor cat(const Tensor& ten0, const Tensor& ten1, int dim);
+	Tensor mean_squared_error(const Tensor& ten0, const Tensor& ten1);
+	Tensor cross_entropy_loss(const Tensor& logits, unsigned* labels);
+	Tensor negative_log_likelihood(const Tensor& probs, unsigned* labels);
+	Tensor one_hot(const Shape& size_x_labels, unsigned* labels, const char* device = "cpu");
+	Tensor causal_mask(unsigned L, const char* device = "cpu");
+}
+namespace Random
+{
+	void set_seed(unsigned long long seed);
+	void shuffle(unsigned size, int* data);
+	float rand_normal(float mean, float std);
+	float rand_uniform(float min, float max);
+	int rand_int(int min, int max);
+}
+namespace Initialization
+{
+	const Tensor& normal(const Tensor& tensor, float mean = 0.f, float std = 1.f);
+	const Tensor& uniform(const Tensor& tensor, float min = 0.f, float max = 1.f);
+}
 
-	// Stores data for an array with the specified dimensions.
-	void create(const Shape& shape);
-
-	// Default constructor for empty arrays.
-	Array() = default;
-
-	// Creates an array with the specified shape.
-	Array(const Shape& shape) { create(shape); }
-
-	// Copies the data of the other array.
-	Array(const Array& other) { *this = other; }
-
-	// Deletes the array data.
-	~Array();
-
-	// --- User functions ---
-
-	const char* str(const char* fmt = "%+.4f") const;
-
-	void set_value(const Shape& idxs, float value);
-	float get_value(const Shape& idxs) const;
-
-	void set_vector(unsigned* route, int idx0, int idx1, float* values);
-	const float* get_vector(unsigned* route, int idx0, int idx1) const;
-	float* get_vector(unsigned* route, int idx0, int idx1);
-
-	float*			data()				{ return _data;			}
-	const float*	data() const		{ return _data;			}
-	unsigned		dim() const			{ return _shape.dim();	}
-	unsigned		size(int dim) const	{ return _shape[dim];	}
-	unsigned		numel() const		{ return _numel;		}
-	const Shape&	shape() const		{ return _shape;		}
-	const Shape&	offset() const		{ return _offset;		}
-
-private:
-	Shape _shape;	// Stores the array's shape.
-
-	float* _data = nullptr;		// Pointer to the internal array values.
-
-	Shape _offset;				// Vector holding offset information of the data.
-	unsigned _numel = 0u;		// Total number of element in the array.
-	unsigned _data_size = 0u;	// Total byte size of the array data.
-};
-
+// No operators are in-place except for the equality operator. All others create a new tensor which can be 
+// instanciated via an equality and will exist as long as there is at least one instance of it. If the tensor
+// is only created as part of a multiple tensor operation, as long as there is gradient involved the tensor
+// will persist in memory until backpropagation.
 class Tensor
 {
+	friend class Module;
 public:
+	// --- Constructors / Destructor ---
+
 	Tensor() = default;
 	Tensor(const Tensor& other);
-	Tensor(const Array& array, const char* device = "cpu", bool requires_grad = false);
 	Tensor(const Shape& shape, const char* device = "cpu", bool requires_grad = false);
 	
 	// Reduces the instance count by one.
 	~Tensor();
-
-	// --- Data functions ---
-
-	const Array& array() const;
 
 	// --- Gradients ---
 
@@ -112,49 +83,25 @@ public:
 	void backward();
 	void zero_grad();
 	const Tensor& gradient() const;
-private:
-	Tensor& internal_gradient();
-public:
 	const char* get_operator() const;
 
 	// --- Quality of life ---
 
-	unsigned numel()		const { return array().numel(); }
-	unsigned dim()			const { return _view.dim();		}
-	unsigned size(int dim)	const { return _view[dim];		}
-	const Shape& shape()	const { return _view;			}
+	unsigned numel()		const { return _internals->_numel;	}
+	unsigned dim()			const { return _view.dim();			}
+	unsigned size(int dim)	const { return _view[dim];			}
+	const Shape& shape()	const { return _view;				}
+	const Shape& stride()	const { return _stride;				}
+	float item()			const;
 	const char* str()		const;
 	const char* device()	const;
+	const char* array_str(const char* fmt = "%+.4f") const;
 private:
-	// For backpropagation it is important to keep track of the operations
-	// used to generate or modify given tensors. This is why each operator 
-	// defines its own inheritance of this class and stores it in the created 
-	// tensor data.
-	class TensorOp
-	{
-	public:
-		// default Constructor/Destructor.
-		explicit TensorOp(const char* type) : _type{ type }{}
-		virtual ~TensorOp() = default;
-		
-		// List to store operator relatives. Last element is nullptr.
-		Tensor* _relatives[2] = { nullptr, nullptr };
 
-		// To be initialized by inheritance.
-		const char* _type;
+	Shape _view = {};	// Viewed shape, it is the one considered for operations and unique to each instance.
+	Shape _stride = {}; // Offsets according to the view, all tensors are contiguous so it only depends on view.
 
-		// Internal backpropagation function to distribute gradients to its relatives.
-		virtual void _backward() = 0;
-	};
-
-	// Viewed shape, it is the one considered for operations and unique to each instance.
-	Shape _view = {};
-
-	// Offsets according to the view, if not 64 byte aligned the tensor will not be contiguous.
-	Shape _offset = {};
-
-	// Whether the tensor says it has grad or not (no_grad() operator).
-	bool _is_no_grad = false;
+	bool _is_no_grad = false; // Whether the tensor says it has grad or not (no_grad() operator).
 
 	// Holds all the internal data of a tensor, to be shared across instances.
 	struct TensorInternals
@@ -166,20 +113,45 @@ private:
 		// Tensor is properly destroyed.
 		unsigned instances = 0u;
 
-		// Array holding the tensor values on CPU.
-		Array array = {};
+		float* _data = nullptr;		// Pointer to the internal tensor values.
+		unsigned _numel = 0u;		// Total number of element in the array.
+		unsigned _data_size = 0u;	// Total byte size of the array data.
 
 		bool is_gpu = false;		// Stores whether the data is stored on the GPU or not.
 		char device[16] = "cpu";	// STores the exact device string.
 
-		TensorOp* op = nullptr;			// Operation used to generate this tensor if exists.
+		// For backpropagation it is important to keep track of the operations
+		// used to generate or modify given tensors. This is why each operator 
+		// defines its own inheritance of this class and stores it in the created 
+		// tensor data.
+		class TensorOp
+		{
+		public:
+			// Constructor/Destructor. We want to store the output tensor beacause it is used for all 
+			// _backward calls, but we don't want it to count to instances, so shinnanigans are necessary.
+			explicit TensorOp(const char* type, const Tensor& _out) : _type{ type }, out{ *new Tensor(_out) } { out._internals->instances--; }
+			virtual ~TensorOp() { out._internals = nullptr; delete &out; }
+
+			// Output tensor data.
+			Tensor& out;
+
+			// List to store operator relatives. Last element is nullptr.
+			Tensor* _relatives[3] = { nullptr, nullptr, nullptr };
+
+			// To be initialized by inheritance.
+			const char* _type;
+
+			// Internal backpropagation function to distribute gradients to its relatives.
+			virtual void _backward() = 0;
+		}
+		*op = nullptr;					// Operation used to generate this tensor if exists.
 		Tensor* gradient = nullptr;		// Gradient tensor if this is required.
 		bool added_to_backward = false; // Whether this tensor has already been added to the backward list.
 	}
 	// This is a pointer so that multiple instances of the tensor can share 
-	// the same exact data, this also means in-place operations effectively
+	// the same internal data, this also means in-place operations effectively
 	// can not exist since it would modify all instances.
-	*_data = nullptr;
+	*_internals = nullptr;
 
 	// When the tensor is transformed or destroyed this method is called to reduce the count 
 	// of instances to a specific tensor data. Deletes the data if that count is zero.
@@ -189,14 +161,29 @@ private:
 	void add_to_backward_list(Tensor*** p_list, unsigned* count);
 
 public:
-	// --- Operators ---
-	// No operators are in-place except for the equality operator. All others create a new tensor which can be 
-	// instanciated via an equality and will exist as long as there is at least one instance of it. If the tensor
-	// is only created as part of a multiple tensor operation, as long as there is gradient involved the tensor
-	// will persist in memory until backpropagation.
-	
-	// --- Non allocation operators ---
+	// --- Internal Operators ---
+	// Internal helpers to modify data without affecting anything else. If using tensors numel must match. 
+	// Functions are public for convenience but they cannot be used inside neural networks logic.
 
+	Tensor& internal_gradient();
+	Tensor internal_copy(bool with_grad, bool copy_grad) const;
+
+	void internal_add(float val);
+	void internal_multiply(float val);
+	void internal_set(float val);
+
+	void internal_add(const Tensor& other);
+	void internal_add_prod(float val, const Tensor& other);
+	void internal_subtract(const Tensor& other);
+	void internal_multiply(const Tensor& other);
+
+	void internal_set_value(const Shape& route, float value);
+	float internal_get_value(const Shape& route);
+	void internal_set_vector(const Shape& route, const float* values);
+	float* internal_get_vector(const Shape& route);
+
+	// --- Non allocation operators ---
+	
 	// Returns a tensor with the same data but that says it has no gradient, this helps to 
 	// do operations with no gradient with almost no extra overhead.
 	Tensor no_grad() const;
@@ -205,16 +192,14 @@ public:
 	// If it was holding data, after takeing the new pointer, it decreases the count on the old one.
 	Tensor& operator=(const Tensor& other);
 
-	Tensor view(const Shape& shape) const;		// Creates a new tensor with the same data but different view.
-	Tensor flatten() const;						// Returns a tensor with the same data reduced to a single vector.
-	Tensor squeeze(int dim) const;				// Returns a tensor with the specified dimension removed from view, must be 1.
-	Tensor unsqueeze(int dim) const;			// Returns a tensor with an added dimension 1 in view, in the specified spot.
+	Tensor view(const Shape& shape) const;	// Creates a new tensor with the same data but different view.
+	Tensor flatten() const;					// Returns a tensor with the same data reduced to a single vector.
+	Tensor squeeze(int dim) const;			// Returns a tensor with the specified dimension removed from view, must be 1.
+	Tensor unsqueeze(int dim) const;		// Returns a tensor with an added dimension 1 in view, in the specified spot.
 
 	// --- Shape operators ---
 
-
 	Tensor transpose(int dim0, int dim1) const;								// Returns a tensor with the specified dimensions transposed.
-	Tensor reshape(const Shape& shape) const;								// Returns a tensor reshaped from to the specified dimensions if possible.
 	Tensor subset(const Shape& shape, const Shape& start_indices) const;	// Returns a subset of the tensor with the specified shape starting from the specified indices.
 	Tensor modify(const Tensor& other, const Shape& start_indices) const;	// Returns a tensor with the same shape but with a subset substituted by the specified tensor.
 	Tensor repeat(int dim, unsigned repetitions) const;						// Returns a tensor with repeated dimensions of out_shape = shape * repetitions.
@@ -271,29 +256,18 @@ public:
 	Tensor& operator-=(float val);
 	Tensor& operator*=(float val);
 	Tensor& operator/=(float val);
+
+	// --- Friendzone ---
+
+	friend Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1);
+	friend Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& bias);
+	friend Tensor Functional::cat(const Tensor& ten0, const Tensor& ten1, int dim);
+	friend Tensor Functional::mean_squared_error(const Tensor& ten0, const Tensor& ten1);
+	friend Tensor Functional::cross_entropy_loss(const Tensor& logits, unsigned* labels);
+	friend Tensor Functional::negative_log_likelihood(const Tensor& probs, unsigned* labels);
+	friend Tensor Functional::one_hot(const Shape& size_x_labels, unsigned* labels, const char* device);
+	friend Tensor Functional::causal_mask(unsigned L, const char* device);
+
+	friend const Tensor& Initialization::normal(const Tensor& tensor, float mean, float std);
+	friend const Tensor& Initialization::uniform(const Tensor& tensor, float min, float max);
 };
-
-namespace Functional
-{
-	static Tensor matmul(const Tensor& ten0, const Tensor& ten1);
-	static Tensor matmul(const Tensor& ten0, const Tensor& ten1, const Tensor& bias);
-	static Tensor cat(const Tensor& ten0, const Tensor& ten1, int dim);
-	static Tensor mean_squared_error(const Tensor& out, const Tensor& y);
-	static Tensor cross_entropy_loss(const Tensor& out, unsigned* labels);
-	static Tensor causal_mask(unsigned L);
-
-	static Tensor sign(const Tensor& tensor)								{ return tensor.sign();				}
-	static Tensor exp(const Tensor& tensor)									{ return tensor.exp();				}
-	static Tensor log(const Tensor& tensor)									{ return tensor.log();				}
-	static Tensor relu(const Tensor& tensor)								{ return tensor.relu();				}
-	static Tensor sigmoid(const Tensor& tensor)								{ return tensor.sigmoid();			}
-	static Tensor tanh(const Tensor& tensor)								{ return tensor.tanh();				}
-	static Tensor sqrt(const Tensor& tensor)								{ return tensor.sqrt();				}
-	static Tensor square(const Tensor& tensor)								{ return tensor.square();			}
-	static Tensor pow(const Tensor& tensor, float exp)						{ return tensor.pow(exp);			}
-	static Tensor mean(const Tensor& tensor, int dim, bool keepdim = false) { return tensor.mean(dim, keepdim); }
-	static Tensor var(const Tensor& tensor, int dim, bool keepdim = false)  { return tensor.var(dim, keepdim);  }
-	static Tensor std(const Tensor& tensor, int dim, bool keepdim = false)	{ return tensor.std(dim, keepdim);	}
-	static Tensor sum(const Tensor& tensor, int dim, bool keepdim = false)  { return tensor.sum(dim, keepdim);	}
-	static Tensor softmax(const Tensor& tensor, int dim)					{ return tensor.softmax(dim);		}
-}

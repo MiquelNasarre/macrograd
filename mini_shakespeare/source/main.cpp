@@ -1,44 +1,179 @@
-#include "macrograd.h"
+#include "macrograd_nn.h"
 #include <stdio.h>
-#include <random>
+#include <math.h>
 
-int main()
+class Linear : public Module
 {
-	Array s0({ 4,6 });
-	Array s1({ 1,5 });
-	Array s2({ 4,1 });
+private:
+	Tensor matrix;
+	Tensor bias;
 
-	for (unsigned i = 0; i < 4; i++)
+	bool _has_bias;
+
+public:
+	Linear(unsigned in_dim, unsigned out_dim, bool has_bias = true, const char* device = "cpu") : _has_bias { has_bias }
 	{
-		s2.set_value({ i,0 }, float(i + 1));
-		for (unsigned j = 0; j < 5; j++)
+		matrix = Initialization::uniform(Tensor(Shape{ in_dim, out_dim }, device), -sqrtf(6.f / in_dim), sqrtf(6.f / in_dim));
+		add_parameter(&matrix);
+
+		if (has_bias)
 		{
-			s0.set_value({ i,j }, rand() / 32000.f);
-			s1.set_value({ 0,j }, float(j));
+			bias = Initialization::uniform(Tensor(Shape{ out_dim, }, device), -sqrtf(1.f / in_dim), sqrtf(1.f / in_dim));
+			add_parameter(&bias);
 		}
 	}
 
-	Tensor a(s0, "cpu", true);
-	Tensor b, c, d;
+	Tensor forward(const Tensor& in) const override 
+	{ 
+		if (_has_bias)
+			return Functional::matmul(in, matrix, bias); 
+		return Functional::matmul(in, matrix);
+	}
+};
 
-	//float lr = 0.05f;
-	//for (unsigned i = 0; i < 200; i++)
-	//{
-	//	a -= lr * a.gradient();
-	//	b = a.softmax(-1).sum(-2, true);
-	//	c = b * a - 0.5f;
-	//	d = c.mean(1).square();
+class MLP : public Module
+{
+	Linear** lins;
+	unsigned count;
+public:
+	template<class... args>
+	MLP(args... fans)
+	{
+		static_assert(sizeof...(args) > 1);		
+		count = sizeof...(args) - 1;
+		unsigned dims[sizeof...(args)] = { unsigned(fans)... };
+		
+		lins = new Linear*[count];
 
-	//	a.zero_grad();
-	//	d.backward();
-	//}
+		for (unsigned i = 0; i < count; i++)
+		{
+			lins[i] = new Linear(dims[i], dims[i + 1]);
+			add_module(*lins[i]);
+		}
+	}
 
-	b = a.reshape({2,2,2,3}).reshape({ 2,3,2,2 }).reshape({ 2,4,3 }).reshape({ 4,6 }).unsqueeze(0).repeat(0, 4);
-	c = b.subset({ 2,1,4 }, { 0,-1,2 }).modify(Tensor(s2).squeeze(1).unsqueeze(0).unsqueeze(0), {1,0,0}).squeeze(1);
-	d = (c + 1.f).square().sum(0).sum(0, true);
-	d.backward();
+	Tensor forward(const Tensor& in) const override
+	{
+		Tensor out = in;
+		for (unsigned i = 0; i < count; i++)
+		{
+			out = lins[i]->forward(out);
+			if (i < count - 1) out = out.relu();
+		}
+		return out;
+	}
+};
 
+#include "MNIST.h"
+int main()
+{
+	float** training_images = NumberRecognition::getImages(TRAINING, 0, 50000);
+	unsigned* training_labels = NumberRecognition::getLabels(TRAINING, 0, 50000);
+	float** testing_images = NumberRecognition::getImages(TESTING, 0, 10000);
+	unsigned* testing_labels = NumberRecognition::getLabels(TESTING, 0, 10000);
+	printf("images loaded successfully!\n\n");
 
-	printf("%s\n\n%s\n\n%s\n\n%s", a.str(), b.str(), c.str(), d.str());
+	unsigned train_size = 50000;
+	unsigned test_size = 10000;
+
+	unsigned epochs = 1000;
+	unsigned batch_size = 256;
+	float lr = 0.02f;
+	float momentum = 0.9f;
+	float weight_decay = 0.001f;
+
+	MLP mlp(IMAGE_DIM, 64, 64, 10);
+	Optimizer opt(mlp, momentum, weight_decay, lr);
+	Tensor a({batch_size, IMAGE_DIM}, "cpu");
+	unsigned* labels = new unsigned[batch_size];
+
+	int* randperm = new int[train_size];
+	for (unsigned i = 0; i < train_size; i++)
+		randperm[i] = i;
+
+	for (unsigned epoch = 1; epoch < epochs + 1; epoch++)
+	{
+		// Training set.
+		mlp.with_grad();
+		{
+			Random::shuffle(train_size, randperm);
+			unsigned idx = 0u;
+			while (idx < train_size) 
+			{
+				// Generate input tensor.
+				bool shortened = train_size < idx + batch_size;
+				unsigned start =  idx;
+				unsigned end =  shortened ? train_size : idx + batch_size;
+				idx = end;
+
+				for (unsigned v = start; v < end; v++)
+				{
+					a.internal_set_vector({ v - start }, training_images[randperm[v]]);
+					labels[v - start] = training_labels[randperm[v]];
+				}
+				Tensor in = shortened ? a.subset({ end - start, IMAGE_DIM }, { 0, 0 }) : a;
+
+				// Forward pass.
+				Tensor out = mlp(in);
+				Tensor loss = Functional::cross_entropy_loss(out, labels);
+				// Backward pass.
+				mlp.zero_grad();
+				loss.backward();
+				opt.step();
+			}
+		}
+		// Test set evalueation.
+		mlp.no_grad();
+		{
+			float accum_loss = 0.f;
+			unsigned accum_count = 0u;
+			unsigned correct_count = 0u;
+			unsigned idx = 0u;
+			while (idx < test_size)
+			{
+				// Generate input tensor.
+				bool shortened = test_size < idx + batch_size;
+				unsigned start = idx;
+				unsigned end = shortened ? test_size : idx + batch_size;
+				idx = end;
+
+				for (unsigned v = start; v < end; v++)
+				{
+					a.internal_set_vector({ v - start }, testing_images[v]);
+					labels[v - start] = testing_labels[v];
+				}
+				Tensor in = shortened ? a.subset({ end - start, IMAGE_DIM }, { 0, 0 }) : a;
+
+				// Forward pass.
+				Tensor out = mlp(in);
+				Tensor loss = Functional::cross_entropy_loss(out, labels);
+				accum_loss += loss.item();
+				accum_count++;
+
+				// Count corrects.
+				for (unsigned v = 0; v < out.size(0); v++)
+				{
+					float* logits = out.internal_get_vector({ v });
+					unsigned argmax = 0;
+					float max = logits[0];
+					for (unsigned i = 1; i < out.size(-1); i++)
+						if (logits[i] > max)
+						{
+							max = logits[i];
+							argmax = i;
+						}
+
+					if (argmax == labels[v])
+						correct_count++;
+				}
+			}
+			printf("Epoch %04u finished | Loss: %.4f | Accuracy: %.2f%%\n", 
+				epoch, accum_loss / accum_count, (100.f * correct_count) / test_size
+			);
+		}
+	}
+
+	delete[] randperm;
+	delete[] labels;
 	return 0;
 }
