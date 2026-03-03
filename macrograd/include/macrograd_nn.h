@@ -32,48 +32,139 @@ public:
 	unsigned get_parameter_count() const		{ return _parameter_count;	}
 };
 
-class Optimizer
+class Optim
 {
-private:
+	friend class Sched;
+protected:
+	float _learning_rate = 0.f;
+	float _weight_decay  = 0.f;
+
 	Module& _module;
 
-	Tensor* _gradient_storage = nullptr;
-
-	float _momentum = 0.f;
-	float _learning_rate = 0.f;
-	float _weight_decay = 0.f;
+	Optim(Module& module) : _module{ module } {}
+	virtual ~Optim() = default;
 
 public:
-	Optimizer(Module& module, float momentum, float weight_decay, float learning_rate) :
-		_module{ module }, _momentum{ momentum }, _learning_rate{ learning_rate }, _weight_decay{ weight_decay }
-	{
-		// Get the parameter count.
-		unsigned count = _module.get_parameter_count();
-		// Get the parameters.
-		Tensor** parameters = _module.get_parameters();
+	float learning_rate() const { return _learning_rate; }
+	float weight_decay()  const { return _weight_decay;  }
 
-		_gradient_storage = new Tensor[count];
-		for (unsigned i = 0; i < count; i++)
-			_gradient_storage[i] = Tensor(Shape(parameters[i]->numel()), parameters[i]->device(), false);
-	}
-
-	~Optimizer() { delete[] _gradient_storage; }
-
-	void step()
-	{
-		// Get the parameter count.
-		unsigned count = _module.get_parameter_count();
-		// Get the parameters.
-		Tensor** parameters = _module.get_parameters();
-
-		for (unsigned i = 0; i < count; i++)
-		{
-			_gradient_storage[i].internal_multiply(_momentum);
-			_gradient_storage[i].internal_add_prod(1.f - _momentum, parameters[i]->internal_gradient());
-			
-			parameters[i]->internal_multiply(1.f - _learning_rate * _weight_decay);
-			parameters[i]->internal_add_prod(-_learning_rate, _gradient_storage[i]);
-		}
-	}
+	virtual void zero_grad() { _module.zero_grad(); }
+	virtual void step() = 0;
+private:
+	Optim(const Optim&) = delete;
+	Optim& operator=(const Optim&) = delete;
 };
 
+class Sched
+{
+protected:
+	Optim& _optimizer;
+
+	Sched(Optim& optim) : _optimizer{ optim } {}
+	virtual ~Sched() = default;
+
+	float& ref_learning_rate() { return _optimizer._learning_rate; }
+	float& ref_weight_decay()  { return _optimizer._weight_decay;  }
+public:
+	virtual void step() = 0;
+private:
+	Sched(const Sched&) = delete;
+	Sched& operator=(const Sched&) = delete;
+};
+
+namespace Optimizer
+{
+	class SGD : public Optim
+	{
+	private:
+		// Storage for the momentum tensors.
+		Tensor* _gradient_storage = nullptr;
+
+		// Momentum value.
+		const float _momentum;
+
+	public:
+		SGD(Module& module, float momentum, float learning_rate = 0.1f, float weight_decay = 0.f);
+		~SGD();
+
+		void step() override;
+	};
+
+	class AdamW : public Optim
+	{
+	private:
+		// Optimizer hyperparameters.
+		const float _beta1, _beta2, _eps;
+		unsigned t = 0u;
+
+		// Storage for the two momentum tensors.
+		Tensor *_moment1 = nullptr, *_moment2 = nullptr;
+
+	public:
+		AdamW(Module& module, float learning_rate, float weight_decay = 0.f, float beta1 = 0.9f, float beta2 = 0.999f, float eps = 1e-8);
+		~AdamW();
+
+		void step() override;
+	};
+}
+
+namespace Scheduler
+{
+	class FunctionalLR : public Sched
+	{
+	private:
+		// Storage for the lr function.
+		float(*_function)() = nullptr;
+
+	public:
+		FunctionalLR(Optim& optimizer, float(*lr_function)()) : 
+			Sched(optimizer), _function{ lr_function } { step(); }
+
+		void step() override { ref_learning_rate() = _function(); }
+	};
+
+	class FunctionalWD : public Sched
+	{
+	private:
+		// Storage for the lr function.
+		float(*_function)() = nullptr;
+
+	public:
+		FunctionalWD(Optim& optimizer, float(*wd_function)()) : 
+			Sched(optimizer), _function{ wd_function } { step(); }
+
+		void step() override { ref_weight_decay() = _function(); }
+	};
+
+	class LinearLR : public Sched
+	{
+	private:
+		// Storage for initial and final LR.
+		const float _lr0, _lr1;
+
+		// Storage for epoch count.
+		const unsigned total_epoch;
+		unsigned _epoch = 0u;
+
+	public:
+		LinearLR(Optim& optimizer, float initial_lr, float final_lr, unsigned epoch);
+
+		void step() override;
+	};
+
+	class CosineLR : public Sched
+	{
+	private:
+		// Storage for initial and final LR.
+		const float _lr0, _lr1;
+
+		// Storage for epoch count.
+		const unsigned total_epoch;
+		unsigned _epoch = 0u;
+
+	public:
+		CosineLR(Optim& optimizer, float initial_lr, float final_lr, unsigned epoch);
+		
+		void step() override;
+	};
+}

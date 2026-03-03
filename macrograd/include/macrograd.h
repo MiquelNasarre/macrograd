@@ -15,17 +15,15 @@ public:
 	template<class... args>
 	Shape(args... sizes)
 	{
-		constexpr unsigned count = sizeof...(args);
-		int processed_sizes[count] = { int(sizes)... };
-
-		*this = Shape(count, processed_sizes);
+		int processed_sizes[sizeof...(args)] = { int(sizes)... };
+		*this = Shape(unsigned(sizeof...(args)), processed_sizes);
 	}
 
 	Shape& operator=(const Shape& other);
 	~Shape() { if (_sizes) delete[] _sizes; }
 
-	int& operator[](int dim)				{ return _sizes[mod(dim, _dim)]; }
-	const int& operator[](int dim) const	{ return _sizes[mod(dim, _dim)]; }
+	int&		operator[](int dim)			{ return _sizes[mod(dim, _dim)]; }
+	const int&	operator[](int dim) const	{ return _sizes[mod(dim, _dim)]; }
 
 	void remove(int dim);
 	void add(int dim, int size);
@@ -87,6 +85,12 @@ public:
 
 	// --- Quality of life ---
 
+	// Returns a copy of the tensor in the specified device. If the tensor had gradient it also 
+	// copies the gradient. Backpropagation data is lost, so you must not use inside a forward pass.
+	Tensor to(const char* device, bool with_grad = false) const;
+
+	bool is_gpu()			const { return _internals && _internals->is_gpu; }
+	bool is_init()			const { return _internals;			}
 	unsigned numel()		const { return _internals->_numel;	}
 	unsigned dim()			const { return _view.dim();			}
 	unsigned size(int dim)	const { return _view[dim];			}
@@ -97,6 +101,7 @@ public:
 	const char* device()	const;
 	const char* array_str(const char* fmt = "%+.4f") const;
 private:
+	// --- Internal Tensor Data ---
 
 	Shape _view = {};	// Viewed shape, it is the one considered for operations and unique to each instance.
 	Shape _stride = {}; // Offsets according to the view, all tensors are contiguous so it only depends on view.
@@ -165,6 +170,8 @@ public:
 	// Internal helpers to modify data without affecting anything else. If using tensors numel must match. 
 	// Functions are public for convenience but they cannot be used inside neural networks logic.
 
+	float* internal_data() const { return _internals ? _internals->_data : nullptr; }
+
 	Tensor& internal_gradient();
 	Tensor internal_copy(bool with_grad, bool copy_grad) const;
 
@@ -203,7 +210,6 @@ public:
 	Tensor subset(const Shape& shape, const Shape& start_indices) const;	// Returns a subset of the tensor with the specified shape starting from the specified indices.
 	Tensor modify(const Tensor& other, const Shape& start_indices) const;	// Returns a tensor with the same shape but with a subset substituted by the specified tensor.
 	Tensor repeat(int dim, unsigned repetitions) const;						// Returns a tensor with repeated dimensions of out_shape = shape * repetitions.
-	Tensor copy(const char* device = "cpu", bool grad = false) const;		// Returns an exact copy of the tensor. This includes This includes array, view and gradient if exist. and gradient if exist.
 
 	// --- Functions ---
 
@@ -211,6 +217,8 @@ public:
 	Tensor exp() const;
 	Tensor log() const;
 	Tensor relu() const;
+	Tensor silu() const;
+	Tensor gelu() const;
 	Tensor sigmoid() const;
 	Tensor tanh() const;
 	Tensor sqrt() const;
@@ -265,9 +273,4 @@ public:
 	friend Tensor Functional::mean_squared_error(const Tensor& ten0, const Tensor& ten1);
 	friend Tensor Functional::cross_entropy_loss(const Tensor& logits, unsigned* labels);
 	friend Tensor Functional::negative_log_likelihood(const Tensor& probs, unsigned* labels);
-	friend Tensor Functional::one_hot(const Shape& size_x_labels, unsigned* labels, const char* device);
-	friend Tensor Functional::causal_mask(unsigned L, const char* device);
-
-	friend const Tensor& Initialization::normal(const Tensor& tensor, float mean, float std);
-	friend const Tensor& Initialization::uniform(const Tensor& tensor, float min, float max);
 };

@@ -421,6 +421,10 @@ void Tensor::backward()
 		list[i]->_internals->added_to_backward = false;
 		list[i]->_internals->op->_backward();
 	}
+
+	// Clean before you leave.
+	if (list)
+		delete[] list;
 }
 
 void Tensor::zero_grad()
@@ -445,6 +449,14 @@ const char* Tensor::get_operator() const
 		return _internals->op->_type;
 
 	return "None";
+}
+
+// Returns a copy of the tensor in the specified device. If the tensor had gradient it also 
+// copies the gradient. Backpropagation data is lost, so you must not use inside a forward pass.
+
+Tensor Tensor::to(const char* device, bool with_grad) const
+{
+	TENSOR_ERROR("CUDA backend is not implemented yet.");
 }
 
 const Tensor& Tensor::gradient() const
@@ -537,7 +549,7 @@ void Tensor::add_to_backward_list(Tensor*** p_list, unsigned* count)
 		new_list[i + 1] = (*p_list)[i];
 
 	if (*p_list)
-		delete* p_list;
+		delete[] *p_list;
 	*p_list = new_list;
 	(*count)++;
 	_internals->added_to_backward = true;

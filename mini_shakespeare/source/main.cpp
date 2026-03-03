@@ -52,6 +52,14 @@ public:
 		}
 	}
 
+	~MLP()
+	{
+		for (unsigned i = 0; i < count; i++)
+			delete lins[i];
+		
+		delete[] lins;
+	}
+
 	Tensor forward(const Tensor& in) const override
 	{
 		Tensor out = in;
@@ -67,113 +75,110 @@ public:
 #include "MNIST.h"
 int main()
 {
-	float** training_images = NumberRecognition::getImages(TRAINING, 0, 50000);
+	float** training_images   = NumberRecognition::getImages(TRAINING, 0, 50000);
 	unsigned* training_labels = NumberRecognition::getLabels(TRAINING, 0, 50000);
-	float** testing_images = NumberRecognition::getImages(TESTING, 0, 10000);
-	unsigned* testing_labels = NumberRecognition::getLabels(TESTING, 0, 10000);
-	printf("images loaded successfully!\n\n");
+	float** testing_images    = NumberRecognition::getImages( TESTING, 0, 10000);
+	unsigned* testing_labels  = NumberRecognition::getLabels( TESTING, 0, 10000);
+	printf("Images loaded successfully!\n\n");
 
-	unsigned train_size = 50000;
-	unsigned test_size = 10000;
-
-	unsigned epochs = 1000;
-	unsigned batch_size = 256;
-	float lr = 0.02f;
-	float momentum = 0.9f;
-	float weight_decay = 0.001f;
-
-	MLP mlp(IMAGE_DIM, 64, 64, 10);
-	Optimizer opt(mlp, momentum, weight_decay, lr);
-	Tensor a({batch_size, IMAGE_DIM}, "cpu");
-	unsigned* labels = new unsigned[batch_size];
-
-	int* randperm = new int[train_size];
-	for (unsigned i = 0; i < train_size; i++)
-		randperm[i] = i;
-
-	for (unsigned epoch = 1; epoch < epochs + 1; epoch++)
 	{
-		// Training set.
-		mlp.with_grad();
-		{
-			Random::shuffle(train_size, randperm);
-			unsigned idx = 0u;
-			while (idx < train_size) 
-			{
-				// Generate input tensor.
-				bool shortened = train_size < idx + batch_size;
-				unsigned start =  idx;
-				unsigned end =  shortened ? train_size : idx + batch_size;
-				idx = end;
+		unsigned train_size = 50000;
+		unsigned test_size = 10000;
 
+		unsigned epochs = 5;
+		unsigned batch_size = 256;
+		float initial_lr = 0.020f;
+		float final_lr = 0.002f;
+		float momentum = 0.900f;
+		float weight_decay = 0.005f;
+
+		MLP mlp(IMAGE_DIM, 128, 64, 10);
+		Optimizer::SGD optimizer(mlp, momentum, initial_lr, weight_decay);
+		Scheduler::CosineLR scheduler(optimizer, initial_lr, final_lr, epochs);
+
+		unsigned* labels = new unsigned[batch_size];
+		int* randperm = new int[train_size];
+		for (unsigned i = 0; i < train_size; i++)
+			randperm[i] = i;
+
+		auto get_batch = [&](unsigned end, unsigned start, bool train)
+			{
+				Tensor in({ end - start, IMAGE_DIM });
 				for (unsigned v = start; v < end; v++)
 				{
-					a.internal_set_vector({ v - start }, training_images[randperm[v]]);
-					labels[v - start] = training_labels[randperm[v]];
+					in.internal_set_vector({ v - start }, train ? training_images[randperm[v]] : testing_images[v]);
+					labels[v - start] = train ? training_labels[randperm[v]] : testing_labels[v];
 				}
-				Tensor in = shortened ? a.subset({ end - start, IMAGE_DIM }, { 0, 0 }) : a;
+				return in;
+			};
 
-				// Forward pass.
-				Tensor out = mlp(in);
-				Tensor loss = Functional::cross_entropy_loss(out, labels);
-				// Backward pass.
-				mlp.zero_grad();
-				loss.backward();
-				opt.step();
-			}
-		}
-		// Test set evalueation.
-		mlp.no_grad();
+		for (unsigned epoch = 1; epoch < epochs + 1; epoch++)
 		{
-			float accum_loss = 0.f;
-			unsigned accum_count = 0u;
-			unsigned correct_count = 0u;
-			unsigned idx = 0u;
-			while (idx < test_size)
+			// Training set.
+			mlp.with_grad();
 			{
-				// Generate input tensor.
-				bool shortened = test_size < idx + batch_size;
-				unsigned start = idx;
-				unsigned end = shortened ? test_size : idx + batch_size;
-				idx = end;
-
-				for (unsigned v = start; v < end; v++)
+				Random::shuffle(train_size, randperm);
+				unsigned start = 0u, end = 0u;
+				while (end < train_size)
 				{
-					a.internal_set_vector({ v - start }, testing_images[v]);
-					labels[v - start] = testing_labels[v];
+					// Generate input tensor.
+					start = end;
+					end = (train_size < start + batch_size) ? train_size : start + batch_size;
+
+					// Get input tensor.
+					Tensor in = get_batch(end, start, true);
+
+					// Forward pass.
+					Tensor out = mlp(in);
+					Tensor loss = Functional::cross_entropy_loss(out, labels);
+					// Backward pass.
+					optimizer.zero_grad();
+					loss.backward();
+					optimizer.step();
 				}
-				Tensor in = shortened ? a.subset({ end - start, IMAGE_DIM }, { 0, 0 }) : a;
-
-				// Forward pass.
-				Tensor out = mlp(in);
-				Tensor loss = Functional::cross_entropy_loss(out, labels);
-				accum_loss += loss.item();
-				accum_count++;
-
-				// Count corrects.
-				for (unsigned v = 0; v < out.size(0); v++)
-				{
-					float* logits = out.internal_get_vector({ v });
-					unsigned argmax = 0;
-					float max = logits[0];
-					for (unsigned i = 1; i < out.size(-1); i++)
-						if (logits[i] > max)
-						{
-							max = logits[i];
-							argmax = i;
-						}
-
-					if (argmax == labels[v])
-						correct_count++;
-				}
+				// Step the scheduler.
+				scheduler.step();
 			}
-			printf("Epoch %04u finished | Loss: %.4f | Accuracy: %.2f%%\n", 
-				epoch, accum_loss / accum_count, (100.f * correct_count) / test_size
-			);
+			// Test set evaluation.
+			mlp.no_grad();
+			{
+				float accum_loss = 0.f;
+				unsigned correct_count = 0u;
+				unsigned start = 0u, end = 0u;
+				while (end < test_size)
+				{
+					// Generate input tensor.
+					start = end;
+					end = (test_size < start + batch_size) ? test_size : start + batch_size;
+
+					// Get input tensor.
+					Tensor in = get_batch(end, start, false);
+
+					// Forward pass.
+					Tensor out = mlp(in);
+					Tensor loss = Functional::cross_entropy_loss(out, labels);
+					accum_loss += loss.item() * (end - start);
+
+					// Count corrects.
+					for (unsigned v = 0; v < out.size(0); v++)
+					{
+						float* logits = out.internal_get_vector({ v });
+						unsigned argmax = 0;
+						for (unsigned i = 1; i < out.size(-1); i++)
+							if (logits[i] > logits[argmax]) argmax = i;
+
+						if (argmax == labels[v]) correct_count++;
+					}
+				}
+				printf("Epoch %04u finished | Learning Rate: %.4f | Loss: %.4f | Accuracy: %.2f%%\n",
+					epoch, optimizer.learning_rate(), accum_loss / test_size, (100.f * correct_count) / test_size
+				);
+			}
 		}
+
+		delete[] randperm;
+		delete[] labels;
 	}
 
-	delete[] randperm;
-	delete[] labels;
 	return 0;
 }

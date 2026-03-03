@@ -33,13 +33,26 @@ Tensor Tensor::internal_copy(bool with_grad, bool copy_grad) const
 
 	Tensor out(_view, device(), false);
 
-	memcpy(out._internals->_data, _internals->_data, _internals->_data_size);
+	if (is_gpu())
+	{
+		TENSOR_ERROR("CUDA backend not implemented yet.");
+	}
+	else
+		memcpy(out._internals->_data, _internals->_data, _internals->_data_size);
 
 	if (with_grad)
 	{
 		out._internals->gradient = new Tensor(_view, device(), false);
 		if (has_grad() && copy_grad)
-			memcpy(out._internals->gradient->_internals->_data, _internals->gradient->_internals->_data, _internals->_data_size);
+		{
+			if (is_gpu())
+			{
+				TENSOR_ERROR("CUDA backend not implemented yet.");
+			}
+			else
+				memcpy(out._internals->gradient->_internals->_data, _internals->gradient->_internals->_data, _internals->_data_size);
+		}
+
 	}
 
 	return out;
@@ -47,11 +60,11 @@ Tensor Tensor::internal_copy(bool with_grad, bool copy_grad) const
 
 void Tensor::internal_add(float val)
 {
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to internally add to an empty tensor."
 	);
 	
-	if (_internals->is_gpu)
+	if (is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -68,11 +81,11 @@ void Tensor::internal_add(float val)
 
 void Tensor::internal_multiply(float val)
 {
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to internally multiply to an empty tensor."
 	);
 
-	if (_internals->is_gpu)
+	if (is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -89,11 +102,11 @@ void Tensor::internal_multiply(float val)
 
 void Tensor::internal_set(float val)
 {
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to internally set an empty tensor."
 	);
 
-	if (_internals->is_gpu)
+	if (is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -110,91 +123,133 @@ void Tensor::internal_set(float val)
 
 void Tensor::internal_add(const Tensor& other)
 {
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to internally add to an empty tensor."
 	);
-	TENSOR_CHECK(other._internals,
+	TENSOR_CHECK(other.is_init(),
 		"Trying to internally add an empty tensor."
 	);
 	TENSOR_CHECK(this->numel() == other.numel(),
 		"Trying to internally add a tensor with a different number of elements."
 	);
+	TENSOR_CHECK(is_gpu() == other.is_gpu(),
+		"Trying to internally add two tensors on different devices."
+	);
 
-	float* data = _internals->_data;
-	float* other_data = other._internals->_data;
-	const int numel = this->numel();
+	if (is_gpu())
+	{
+		TENSOR_ERROR("CUDA backend not implemented yet.");
+	}
+	else
+	{
+		float* data = _internals->_data;
+		float* other_data = other._internals->_data;
+		const int numel = this->numel();
 
-	int idx = -1;
-	while (++idx < numel)
-		data[idx] += other_data[idx];
+		int idx = -1;
+		while (++idx < numel)
+			data[idx] += other_data[idx];
+	}
+
 }
 
 void Tensor::internal_add_prod(float val, const Tensor& other)
 {
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to internally add to an empty tensor."
 	);
-	TENSOR_CHECK(other._internals,
+	TENSOR_CHECK(other.is_init(),
 		"Trying to internally add an empty tensor."
 	);
 	TENSOR_CHECK(this->numel() == other.numel(),
 		"Trying to internally add a tensor with a different number of elements."
 	);
+	TENSOR_CHECK(is_gpu() == other.is_gpu(),
+		"Trying to internally add two tensors on different devices."
+	);
 
-	float* data = _internals->_data;
-	float* other_data = other._internals->_data;
-	const int numel = this->numel();
+	if (is_gpu())
+	{
+		TENSOR_ERROR("CUDA backend not implemented yet.");
+	}
+	else
+	{
+		float* data = _internals->_data;
+		float* other_data = other._internals->_data;
+		const int numel = this->numel();
 
-	int idx = -1;
-	while (++idx < numel)
-		data[idx] += val * other_data[idx];
+		int idx = -1;
+		while (++idx < numel)
+			data[idx] += val * other_data[idx];
+	}
+
 }
 
 void Tensor::internal_subtract(const Tensor& other)
 {
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to internally subtract to an empty tensor."
 	);
-	TENSOR_CHECK(other._internals,
+	TENSOR_CHECK(other.is_init(),
 		"Trying to internally subtract an empty tensor."
 	);
 	TENSOR_CHECK(this->numel() == other.numel(),
 		"Trying to internally subtract a tensor with a different number of elements."
 	);
+	TENSOR_CHECK(is_gpu() == other.is_gpu(),
+		"Trying to internally subtract two tensors on different devices."
+	);
 
-	float* data = _internals->_data;
-	float* other_data = other._internals->_data;
-	const int numel = this->numel();
+	if (is_gpu())
+	{
+		TENSOR_ERROR("CUDA backend not implemented yet.");
+	}
+	else
+	{
+		float* data = _internals->_data;
+		float* other_data = other._internals->_data;
+		const int numel = this->numel();
 
-	int idx = -1;
-	while (++idx < numel)
-		data[idx] -= other_data[idx];
+		int idx = -1;
+		while (++idx < numel)
+			data[idx] -= other_data[idx];
+	}
 }
 
 void Tensor::internal_multiply(const Tensor& other)
 {
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to internally multiply an empty tensor."
 	);
-	TENSOR_CHECK(other._internals,
+	TENSOR_CHECK(other.is_init(),
 		"Trying to internally multiply by an empty tensor."
 	);
 	TENSOR_CHECK(this->numel() == other.numel(),
 		"Trying to internally multiply a tensor with a different number of elements."
 	);
+	TENSOR_CHECK(is_gpu() == other.is_gpu(),
+		"Trying to internally multiply two tensors on different devices."
+	);
 
-	float* data = _internals->_data;
-	float* other_data = other._internals->_data;
-	const int numel = this->numel();
+	if (is_gpu())
+	{
+		TENSOR_ERROR("CUDA backend not implemented yet.");
+	}
+	else
+	{
+		float* data = _internals->_data;
+		float* other_data = other._internals->_data;
+		const int numel = this->numel();
 
-	int idx = -1;
-	while (++idx < numel)
-		data[idx] *= other_data[idx];
+		int idx = -1;
+		while (++idx < numel)
+			data[idx] *= other_data[idx];
+	}
 }
 
 void Tensor::internal_set_value(const Shape& route, float value)
 {
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to set a value on an empty tensor."
 	);
 	TENSOR_CHECK(numel(),
@@ -202,17 +257,23 @@ void Tensor::internal_set_value(const Shape& route, float value)
 		"The tensor shape is %s", _view.str()
 	);
 
-	float* ptr = _internals->_data;
+	if (is_gpu())
+	{
+		TENSOR_ERROR("CUDA backend not implemented yet.");
+	}
+	else
+	{
+		float* ptr = _internals->_data;
+		for (unsigned d = 0; d < dim(); d++)
+			ptr += ((route[d] + _view[d] * (2 - route[d] / _view[d])) % _view[d]) * _stride[d];
 
-	for (unsigned d = 0; d < dim(); d++)
-		ptr += ((route[d] + _view[d] * (2 - route[d] / _view[d])) % _view[d]) * _stride[d];
-
-	*ptr = value;
+		*ptr = value;
+	}
 }
 
 float Tensor::internal_get_value(const Shape& route)
 {
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to get a value on an empty array."
 	);
 	TENSOR_CHECK(numel(),
@@ -220,17 +281,23 @@ float Tensor::internal_get_value(const Shape& route)
 		"The array shape is %s", _view.str()
 	);
 
-	float* ptr = _internals->_data;
+	if (is_gpu())
+	{
+		TENSOR_ERROR("CUDA backend not implemented yet.");
+	}
+	else
+	{
+		float* ptr = _internals->_data;
+		for (unsigned d = 0; d < dim(); d++)
+			ptr += ((route[d] + _view[d] * (2 - route[d] / _view[d])) % _view[d]) * _stride[d];
 
-	for (unsigned d = 0; d < dim(); d++)
-		ptr += ((route[d] + _view[d] * (2 - route[d] / _view[d])) % _view[d]) * _stride[d];
-
-	return *ptr;
+		return *ptr;
+	}
 }
 
 void Tensor::internal_set_vector(const Shape& route, const float* values)
 {
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to set a vector on an empty tensor."
 	);
 	TENSOR_CHECK(numel(),
@@ -248,13 +315,20 @@ void Tensor::internal_set_vector(const Shape& route, const float* values)
 	for (unsigned i = route.dim(); i < _view.dim(); i++)
 		_data_size *= _view[i];
 
-	// Copy given data.
-	memcpy(_internals->_data + idx, values, _data_size);
+	if (is_gpu())
+	{
+		TENSOR_ERROR("CUDA backend not implemented yet.");
+	}
+	else
+	{
+		// Copy given data.
+		memcpy(_internals->_data + idx, values, _data_size);
+	}
 }
 
 float* Tensor::internal_get_vector(const Shape& route)
 {
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to get a vector of an empty tensor."
 	);
 	TENSOR_CHECK(numel(),
@@ -262,13 +336,20 @@ float* Tensor::internal_get_vector(const Shape& route)
 		"The tensor shape is %s", _view.str()
 	);
 
-	// Get idx given route. Modulo for negative numbers.
-	unsigned idx = 0;
-	for (unsigned i = 0; i < route.dim(); i++)
-		idx += (route[i] + _view[i] * (2 - route[i] / _view[i]) % _view[i]) * _stride[i];
+	if (is_gpu())
+	{
+		TENSOR_ERROR("CUDA backend not implemented yet.");
+	}
+	else
+	{
+		// Get idx given route. Modulo for negative numbers.
+		unsigned idx = 0;
+		for (unsigned i = 0; i < route.dim(); i++)
+			idx += (route[i] + _view[i] * (2 - route[i] / _view[i]) % _view[i]) * _stride[i];
 
-	// Return data ptr.
-	return _internals->_data + idx;
+		// Return data ptr.
+		return _internals->_data + idx;
+	}
 }
 
 /*
@@ -304,7 +385,7 @@ Tensor& Tensor::operator=(const Tensor& other)
 
 Tensor Tensor::view(const Shape& shape) const
 {
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to call view on an empty tensor."
 	);
 	TENSOR_CHECK(shape.dim(),
@@ -369,7 +450,7 @@ Tensor Tensor::view(const Shape& shape) const
 Tensor Tensor::flatten() const
 {
 	// Tensor must be initialized.
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to flatten an empty tensor."
 	);
 	
@@ -386,7 +467,7 @@ Tensor Tensor::flatten() const
 
 Tensor Tensor::squeeze(int dim) const
 {
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to call squeeze on an empty tensor."
 	);
 	TENSOR_CHECK(_view.dim() > 1,
@@ -408,7 +489,7 @@ Tensor Tensor::squeeze(int dim) const
 
 Tensor Tensor::unsqueeze(int dim) const
 {
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to call unsqueeze on an empty tensor."
 	);
 
@@ -454,7 +535,7 @@ Tensor Tensor::transpose(int dim0, int dim1) const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to transpose an empty tensor."
 	);
 
@@ -479,7 +560,7 @@ Tensor Tensor::transpose(int dim0, int dim1) const
 	Tensor out(out_shape, device(), has_grad());
 
 	// Now we actually transpose the tensor.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -573,7 +654,7 @@ Tensor Tensor::subset(const Shape& shape, const Shape& start_indices) const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to subset an empty tensor."
 	);
 	TENSOR_CHECK(shape.dim() == dim(),
@@ -609,7 +690,7 @@ Tensor Tensor::subset(const Shape& shape, const Shape& start_indices) const
 	Tensor out(shape, device(), has_grad());
 
 	// Now we actually subset the tensor.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -708,14 +789,14 @@ Tensor Tensor::modify(const Tensor& other, const Shape& start_indices) const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to modify an empty tensor."
 	);
-	TENSOR_CHECK(other._internals,
+	TENSOR_CHECK(other.is_init(),
 		"Trying to modify with an empty other tensor."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(_internals->is_gpu == other._internals->is_gpu,
+	TENSOR_CHECK(is_gpu() == other.is_gpu(),
 		"Trying to add madify a tensor with another tensor on a different device."
 	);
 	TENSOR_CHECK(other._view.dim() == dim(),
@@ -750,7 +831,7 @@ Tensor Tensor::modify(const Tensor& other, const Shape& start_indices) const
 	out._stride = _stride;
 
 	// Now we actually modify the tensor.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -845,7 +926,7 @@ Tensor Tensor::repeat(int dim, unsigned repetitions) const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to add repetitions to an empty tensor."
 	);
 	// Repeated shape must be unitary.
@@ -863,7 +944,7 @@ Tensor Tensor::repeat(int dim, unsigned repetitions) const
 	Tensor out(out_shape, device(), has_grad());
 
 	// Now we actually repeat the tensor.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -906,52 +987,6 @@ Tensor Tensor::repeat(int dim, unsigned repetitions) const
 	return out;
 }
 
-// Returns an exact copy of the tensor. This includes array, view and gradient if exist.
-
-Tensor Tensor::copy(const char* device, bool grad) const
-{
-	// Copy tensor operator for backpropagation.
-	class CopyOp : public Tensor::TensorInternals::TensorOp
-	{
-		// Tensor copy storage for the input.
-		Tensor in;
-
-	public:
-		// Constructor, stores all the data of the operation.
-		CopyOp(const Tensor& _in, const Tensor& _out) : TensorOp{ "Copy", _out },
-			in{ _in }
-		{
-			_relatives[0] = &in;
-		}
-
-		// Backpropagation. Route the gradient.
-		void _backward() override
-		{
-			in.internal_gradient() += out.gradient();
-		}
-	};
-
-	// Tensor must be initialized.
-	TENSOR_CHECK(_internals,
-		"Trying to call copy on an empty tensor."
-	);
-
-	// If both have gradient copy it and set operator.
-	Tensor out = internal_copy(false, false);
-	out._view = _view;
-	out._stride = _stride;
-	if (grad)
-	{
-		if (has_grad())
-		{
-			out._internals->gradient = new Tensor(_internals->gradient->internal_copy(false, false));
-			out._internals->op = new CopyOp(*this, out);
-		}
-		else out._internals->gradient = new Tensor(_view, device, false);
-	}
-	return out;
-}
-
 /*
 --------------------------------------------------------------------------------------------------------------------------
  Function Operators
@@ -961,7 +996,7 @@ Tensor Tensor::copy(const char* device, bool grad) const
 Tensor Tensor::sign() const
 {
 	// Tensor must be initialized.
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to get the sign of an empty tensor."
 	);
 
@@ -969,7 +1004,7 @@ Tensor Tensor::sign() const
 	Tensor out(shape(), device(), false);
 
 	// Now we actually add signs to the tensor.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -1012,7 +1047,7 @@ Tensor Tensor::exp() const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to exponentiate an empty tensor."
 	);
 
@@ -1020,7 +1055,7 @@ Tensor Tensor::exp() const
 	Tensor out(shape(), device(), has_grad());
 
 	// Now we actually exponentiate the tensor.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -1067,7 +1102,7 @@ Tensor Tensor::log() const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to log an empty tensor."
 	);
 
@@ -1075,7 +1110,7 @@ Tensor Tensor::log() const
 	Tensor out(shape(), device(), has_grad());
 
 	// Now we actually log the tensors.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -1122,7 +1157,7 @@ Tensor Tensor::relu() const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to apply ReLU to an empty tensor."
 	);
 
@@ -1130,7 +1165,7 @@ Tensor Tensor::relu() const
 	Tensor out(shape(), device(), has_grad());
 
 	// Now we actually ReLU the tensors.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -1148,6 +1183,127 @@ Tensor Tensor::relu() const
 	// If it was a gradient operation store a ReLUOp instance.
 	if (has_grad())
 		out._internals->op = new ReLUOp(*this, out);
+
+	// Return out.
+	return out;
+}
+
+Tensor Tensor::silu() const
+{
+	// SiLU tensor operator for backpropagation.
+	class SiLUOp : public Tensor::TensorInternals::TensorOp
+	{
+		// Tensor copy storage for the input.
+		Tensor in;
+
+	public:
+		// Constructor, stores all the data of the operation.
+		SiLUOp(const Tensor& _in, const Tensor& _out) : TensorOp{ "SiLU", _out },
+			in{ _in }
+		{
+			_relatives[0] = &in;
+		}
+
+		// Backpropagation. For the derivative is sig * (1 + x - out).
+		void _backward() override
+		{
+			in.internal_gradient() += out.gradient() * (out.no_grad() + in.no_grad().sigmoid() * (1.f - out.no_grad()));
+		}
+	};
+
+	// Tensor must be initialized.
+	TENSOR_CHECK(is_init(),
+		"Trying to apply SiLU to an empty tensor."
+	);
+
+	// Create output with the same shape as tensor.
+	Tensor out(shape(), device(), has_grad());
+
+	// Now we actually SiLU the tensors.
+	if (out.is_gpu())
+	{
+		TENSOR_ERROR("CUDA backend not implemented yet.");
+	}
+	else
+	{
+		// Extract the data.
+		float* out_data = out._internals->_data;
+		float* ten_data = _internals->_data;
+		// Iterate through all elements.
+		int idx = -1, _numel = int(numel());
+		while (++idx < _numel)
+			out_data[idx] = ten_data[idx] / (1.f + expf(-ten_data[idx]));
+	}
+
+	// If it was a gradient operation store a SiLUOp instance.
+	if (has_grad())
+		out._internals->op = new SiLUOp(*this, out);
+
+	// Return out.
+	return out;
+}
+
+Tensor Tensor::gelu() const
+{
+	// GELU tensor operator for backpropagation.
+	class GELUOp : public Tensor::TensorInternals::TensorOp
+	{
+		// Tensor copy storage for the input and Phi.
+		Tensor in, Phi;
+
+	public:
+		// Constructor, stores all the data of the operation.
+		GELUOp(const Tensor& _in, const Tensor& _Phi, const Tensor& _out) : TensorOp{ "GELU", _out },
+			in{ _in }, Phi{ _Phi }
+		{
+			_relatives[0] = &in;
+		}
+
+		// Backpropagation. For the derivative is Phi + in * phi(in).
+		void _backward() override
+		{
+			constexpr float inv_sqrt_2pi = 0.3989422804f;
+			Tensor phi = inv_sqrt_2pi * (-0.5f * in.no_grad() * in.no_grad()).exp();
+			in.internal_gradient() += out.gradient() * (Phi + in.no_grad() * phi);
+		}
+	};
+
+	// Tensor must be initialized.
+	TENSOR_CHECK(is_init(),
+		"Trying to apply GELU to an empty tensor."
+	);
+
+	// Create intermediate tensor as erf of x for backprop.
+	Tensor Phi(shape(), device(), false);
+
+	// Create output with the same shape as tensor.
+	Tensor out(shape(), device(), has_grad());
+
+	// Now we actually GELU the tensor.
+	if (out.is_gpu())
+	{
+		TENSOR_ERROR("CUDA backend not implemented yet.");
+	}
+	else
+	{
+		// Extract the data.
+		float* out_data = out._internals->_data;
+		float* Phi_data = Phi._internals->_data;
+		float* ten_data = _internals->_data;
+		// Iterate through all elements.
+		int idx = -1, _numel = int(numel());
+		while (++idx < _numel)
+		{
+			const float x = ten_data[idx];
+			constexpr float sq2 = 1.4142135624f;
+			Phi_data[idx] = 0.5f * (1.f + erff(x / sq2));
+			out_data[idx] = x * Phi_data[idx];
+		}
+	}
+
+	// If it was a gradient operation store a GELUOp instance.
+	if (has_grad())
+		out._internals->op = new GELUOp(*this, Phi, out);
 
 	// Return out.
 	return out;
@@ -1177,7 +1333,7 @@ Tensor Tensor::sigmoid() const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to apply sigmoid to an empty tensor."
 	);
 
@@ -1185,7 +1341,7 @@ Tensor Tensor::sigmoid() const
 	Tensor out(shape(), device(), has_grad());
 
 	// Now we actually sigmoid the tensor.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -1197,7 +1353,7 @@ Tensor Tensor::sigmoid() const
 		// Iterate through all elements.
 		int idx = -1, _numel = int(numel());
 		while (++idx < _numel)
-			out_data[idx] = 1.f / 1.f + expf(-ten_data[idx]);
+			out_data[idx] = 1.f / (1.f + expf(-ten_data[idx]));
 	}
 
 	// If it was a gradient operation store a SigOp instance.
@@ -1232,7 +1388,7 @@ Tensor Tensor::tanh() const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to apply tanh to an empty tensor."
 	);
 
@@ -1240,7 +1396,7 @@ Tensor Tensor::tanh() const
 	Tensor out(shape(), device(), has_grad());
 
 	// Now we actually tanh the tensor.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -1290,7 +1446,7 @@ Tensor Tensor::sqrt() const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to get the square root of an empty tensor."
 	);
 
@@ -1298,7 +1454,7 @@ Tensor Tensor::sqrt() const
 	Tensor out(shape(), device(), has_grad());
 
 	// Now we actually sqrt the tensor.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -1345,7 +1501,7 @@ Tensor Tensor::square() const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to square an empty tensor."
 	);
 
@@ -1353,7 +1509,7 @@ Tensor Tensor::square() const
 	Tensor out(shape(), device(), has_grad());
 
 	// Now we actually square the tensor.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -1404,7 +1560,7 @@ Tensor Tensor::pow(float exp) const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to square an empty tensor."
 	);
 
@@ -1412,7 +1568,7 @@ Tensor Tensor::pow(float exp) const
 	Tensor out(shape(), device(), has_grad());
 
 	// Now we actually power the tensor.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -1462,7 +1618,7 @@ Tensor Tensor::mean(int dim, bool keepdim) const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to apply mean to an empty tensor."
 	);
 
@@ -1479,7 +1635,7 @@ Tensor Tensor::mean(int dim, bool keepdim) const
 	Tensor out(out_shape, device(), has_grad());
 
 	// Now we actually average the tensor.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -1553,7 +1709,7 @@ Tensor Tensor::var(int dim, bool keepdim) const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to apply variance to an empty tensor."
 	);
 
@@ -1570,7 +1726,7 @@ Tensor Tensor::var(int dim, bool keepdim) const
 	Tensor out(out_shape, device(), has_grad());
 
 	// Now we actually get the tensor variance.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -1651,7 +1807,7 @@ Tensor Tensor::std(int dim, bool keepdim) const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to apply standard deviation to an empty tensor."
 	);
 
@@ -1668,7 +1824,7 @@ Tensor Tensor::std(int dim, bool keepdim) const
 	Tensor out(out_shape, device(), has_grad());
 
 	// Now we actually get the tensor deviation.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -1745,7 +1901,7 @@ Tensor Tensor::sum(int dim, bool keepdim) const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to apply sum to an empty tensor."
 	);
 
@@ -1762,7 +1918,7 @@ Tensor Tensor::sum(int dim, bool keepdim) const
 	Tensor out(out_shape, device(), has_grad());
 
 	// Now we actually sum the tensor.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -1836,7 +1992,7 @@ Tensor Tensor::softmax(int dim) const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to apply softmax to an empty tensor."
 	);
 
@@ -1851,7 +2007,7 @@ Tensor Tensor::softmax(int dim) const
 	Shape out_shape = shape();
 
 	// Now we actually apply softmax to the tensor.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -1939,14 +2095,14 @@ Tensor operator+(const Tensor& ten0, const Tensor& ten1)
 	// --- Sanity checks ---
 	
 	// Both tensor must be initialized.
-	TENSOR_CHECK(ten0._internals,
+	TENSOR_CHECK(ten0.is_init(),
 		"Trying to add two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(ten1._internals,
+	TENSOR_CHECK(ten1.is_init(),
 		"Trying to add two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(ten0._internals->is_gpu == ten1._internals->is_gpu,
+	TENSOR_CHECK(ten0.is_gpu() == ten1.is_gpu(),
 		"Trying to add two tensors in different devices is not allowed."
 	);
 	// Both tensor must have the same dimensionality to avoid ambiguity.
@@ -1977,7 +2133,7 @@ Tensor operator+(const Tensor& ten0, const Tensor& ten1)
 			ten1_summed = ten1_summed.sum(i, true);
 
 	// Now we actually sum the tensors.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -2080,14 +2236,14 @@ Tensor operator-(const Tensor& ten0, const Tensor& ten1)
 	// --- Sanity checks ---
 
 	// Both tensor must be initialized.
-	TENSOR_CHECK(ten0._internals,
+	TENSOR_CHECK(ten0.is_init(),
 		"Trying to subtract two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(ten1._internals,
+	TENSOR_CHECK(ten1.is_init(),
 		"Trying to subtract two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(ten0._internals->is_gpu == ten1._internals->is_gpu,
+	TENSOR_CHECK(ten0.is_gpu() == ten1.is_gpu(),
 		"Trying to subtract two tensors in different devices is not allowed."
 	);
 	// Both tensor must have the same dimensionality to avoid ambiguity.
@@ -2118,7 +2274,7 @@ Tensor operator-(const Tensor& ten0, const Tensor& ten1)
 			ten1_summed = ten1_summed.sum(i, true);
 
 	// Now we actually sum the tensors.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -2221,14 +2377,14 @@ Tensor operator*(const Tensor& ten0, const Tensor& ten1)
 	// --- Sanity checks ---
 
 	// Both tensor must be initialized.
-	TENSOR_CHECK(ten0._internals,
+	TENSOR_CHECK(ten0.is_init(),
 		"Trying to multiply two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(ten1._internals,
+	TENSOR_CHECK(ten1.is_init(),
 		"Trying to multiply two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(ten0._internals->is_gpu == ten1._internals->is_gpu,
+	TENSOR_CHECK(ten0.is_gpu() == ten1.is_gpu(),
 		"Trying to multiply two tensors in different devices is not allowed."
 	);
 	// Both tensor must have the same dimensionality to avoid ambiguity.
@@ -2259,7 +2415,7 @@ Tensor operator*(const Tensor& ten0, const Tensor& ten1)
 			ten1_summed = ten1_summed.sum(i, true);
 
 	// Now we actually sum the tensors.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -2362,14 +2518,14 @@ Tensor operator/(const Tensor& ten0, const Tensor& ten1)
 	// --- Sanity checks ---
 
 	// Both tensor must be initialized.
-	TENSOR_CHECK(ten0._internals,
+	TENSOR_CHECK(ten0.is_init(),
 		"Trying to add two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(ten1._internals,
+	TENSOR_CHECK(ten1.is_init(),
 		"Trying to add two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(ten0._internals->is_gpu == ten1._internals->is_gpu,
+	TENSOR_CHECK(ten0.is_gpu() == ten1.is_gpu(),
 		"Trying to add two tensors in different devices is not allowed."
 	);
 	// Both tensor must have the same dimensionality to avoid ambiguity.
@@ -2400,7 +2556,7 @@ Tensor operator/(const Tensor& ten0, const Tensor& ten1)
 			ten1_summed = ten1_summed.sum(i, true);
 
 	// Now we actually divide the tensors.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -2498,7 +2654,7 @@ Tensor operator+(const Tensor& ten, float val)
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(ten._internals,
+	TENSOR_CHECK(ten.is_init(),
 		"Trying to do scalar addition with an empty tensor."
 	);
 
@@ -2506,7 +2662,7 @@ Tensor operator+(const Tensor& ten, float val)
 	Tensor out(ten.shape(), ten.device(), ten.has_grad());
 
 	// Now we actually sum the tensors.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -2561,7 +2717,7 @@ Tensor operator*(const Tensor& ten, float val)
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(ten._internals,
+	TENSOR_CHECK(ten.is_init(),
 		"Trying to do scalar multiplication with an empty tensor."
 	);
 
@@ -2569,7 +2725,7 @@ Tensor operator*(const Tensor& ten, float val)
 	Tensor out(ten.shape(), ten.device(), ten.has_grad());
 
 	// Now we actually multiply the tensors.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -2626,7 +2782,7 @@ Tensor operator-(float val, const Tensor& ten)
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(ten._internals,
+	TENSOR_CHECK(ten.is_init(),
 		"Trying to do scalar subtraction with an empty tensor."
 	);
 
@@ -2634,7 +2790,7 @@ Tensor operator-(float val, const Tensor& ten)
 	Tensor out(ten.shape(), ten.device(), ten.has_grad());
 
 	// Now we actually subtract the tensors.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -2686,7 +2842,7 @@ Tensor operator/(float val, const Tensor& ten)
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(ten._internals,
+	TENSOR_CHECK(ten.is_init(),
 		"Trying to do scalar division with an empty tensor."
 	);
 
@@ -2694,7 +2850,7 @@ Tensor operator/(float val, const Tensor& ten)
 	Tensor out(ten.shape(), ten.device(), ten.has_grad());
 
 	// Now we actually divide the tensors.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -2741,7 +2897,7 @@ Tensor Tensor::operator-() const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to negate an empty tensor."
 	);
 
@@ -2749,7 +2905,7 @@ Tensor Tensor::operator-() const
 	Tensor out(shape(), device(), has_grad());
 
 	// Now we actually negate the tensor.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -2784,7 +2940,7 @@ Tensor& Tensor::operator+=(const Tensor& other)
 	if (has_grad())
 	{
 		Tensor out = *this + other;
-		out.internal_gradient() = gradient().copy(device(), false);
+		out.internal_gradient() = gradient().internal_copy(false, false);
 		return *this = out;
 	}
 	// If there is another instance make sure to not modify it.
@@ -2794,14 +2950,14 @@ Tensor& Tensor::operator+=(const Tensor& other)
 	// --- Sanity checks ---
 	
 	// Both tensors must be initialized.
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to add two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(other._internals,
+	TENSOR_CHECK(other.is_init(),
 		"Trying to add two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(_internals->is_gpu == other._internals->is_gpu,
+	TENSOR_CHECK(is_gpu() == other.is_gpu(),
 		"Trying to add two tensors in different devices is not allowed."
 	);
 	// Both tensor must have the same dimensionality to avoid ambiguity.
@@ -2826,7 +2982,7 @@ Tensor& Tensor::operator+=(const Tensor& other)
 			other_summed = other_summed.sum(i, true);
 
 	// Now we actually sum the tensors.
-	if (_internals->is_gpu)
+	if (is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -2898,7 +3054,7 @@ Tensor& Tensor::operator-=(const Tensor& other)
 	if (has_grad())
 	{
 		Tensor out = *this - other;
-		out.internal_gradient() = gradient().copy(device(), false);
+		out.internal_gradient() = gradient().internal_copy(false, false);
 		return *this = out;
 	}
 	// If there is another instance make sure to not modify it.
@@ -2908,14 +3064,14 @@ Tensor& Tensor::operator-=(const Tensor& other)
 	// --- Sanity checks ---
 
 	// Both tensors must be initialized.
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to subtract two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(other._internals,
+	TENSOR_CHECK(other.is_init(),
 		"Trying to subtract two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(_internals->is_gpu == other._internals->is_gpu,
+	TENSOR_CHECK(is_gpu() == other.is_gpu(),
 		"Trying to subtract two tensors in different devices is not allowed."
 	);
 	// Both tensor must have the same dimensionality to avoid ambiguity.
@@ -2940,7 +3096,7 @@ Tensor& Tensor::operator-=(const Tensor& other)
 			other_summed = other_summed.sum(i, true);
 
 	// Now we actually subtract the tensors.
-	if (_internals->is_gpu)
+	if (is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -3012,7 +3168,7 @@ Tensor& Tensor::operator*=(const Tensor& other)
 	if (has_grad())
 	{
 		Tensor out = *this * other;
-		out.internal_gradient() = gradient().copy(device(), false);
+		out.internal_gradient() = gradient().internal_copy(false, false);
 		return *this = out;
 	}
 	// If there is another instance make sure to not modify it.
@@ -3022,14 +3178,14 @@ Tensor& Tensor::operator*=(const Tensor& other)
 	// --- Sanity checks ---
 
 	// Both tensors must be initialized.
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to multiply two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(other._internals,
+	TENSOR_CHECK(other.is_init(),
 		"Trying to multiply two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(_internals->is_gpu == other._internals->is_gpu,
+	TENSOR_CHECK(is_gpu() == other.is_gpu(),
 		"Trying to multiply two tensors in different devices is not allowed."
 	);
 	// Both tensor must have the same dimensionality to avoid ambiguity.
@@ -3054,7 +3210,7 @@ Tensor& Tensor::operator*=(const Tensor& other)
 			other_summed = other_summed.sum(i, true);
 
 	// Now we actually sum the tensors.
-	if (_internals->is_gpu)
+	if (is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -3126,7 +3282,7 @@ Tensor& Tensor::operator/=(const Tensor& other)
 	if (has_grad())
 	{
 		Tensor out = *this / other;
-		out.internal_gradient() = gradient().copy(device(), false);
+		out.internal_gradient() = gradient().internal_copy(false, false);
 		return *this = out;
 	}
 	// If there is another instance make sure to not modify it.
@@ -3136,14 +3292,14 @@ Tensor& Tensor::operator/=(const Tensor& other)
 	// --- Sanity checks ---
 
 // Both tensors must be initialized.
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to divide two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(other._internals,
+	TENSOR_CHECK(other.is_init(),
 		"Trying to divide two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(_internals->is_gpu == other._internals->is_gpu,
+	TENSOR_CHECK(is_gpu() == other.is_gpu(),
 		"Trying to divide two tensors in different devices is not allowed."
 	);
 	// Both tensor must have the same dimensionality to avoid ambiguity.
@@ -3168,7 +3324,7 @@ Tensor& Tensor::operator/=(const Tensor& other)
 			other_summed = other_summed.sum(i, true);
 
 	// Now we actually divide the tensors.
-	if (_internals->is_gpu)
+	if (is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -3243,17 +3399,17 @@ Tensor& Tensor::operator+=(float val)
 	{
 		Tensor out = *this + val;
 		if (has_grad())
-			out.internal_gradient() = gradient().copy(device(), false);
+			out.internal_gradient() = gradient().internal_copy(false, false);
 		return *this = out;
 	}
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to add two tensors while the first tensor is empty."
 	);
 
 	// Now we actually sum the tensors.
-	if (_internals->is_gpu)
+	if (is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -3283,17 +3439,17 @@ Tensor& Tensor::operator*=(float val)
 	{
 		Tensor out = *this * val;
 		if (has_grad())
-			out.internal_gradient() = gradient().copy(device(), false);
+			out.internal_gradient() = gradient().internal_copy(false, false);
 		return *this = out;
 	}
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(_internals,
+	TENSOR_CHECK(is_init(),
 		"Trying to multiply by a scalar on an empty tensor."
 	);
 
 	// Now we actually multiply the tensors.
-	if (_internals->is_gpu)
+	if (is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -3349,14 +3505,14 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1)
 	};
 
 	// Both tensor must be initialized.
-	TENSOR_CHECK(mat0._internals,
+	TENSOR_CHECK(mat0.is_init(),
 		"Trying to matrix multiply two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(mat1._internals,
+	TENSOR_CHECK(mat1.is_init(),
 		"Trying to matrix multiply two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(mat0._internals->is_gpu == mat1._internals->is_gpu,
+	TENSOR_CHECK(mat0.is_gpu() == mat1.is_gpu(),
 		"Trying to matrix multiply two tensors in different devices is not allowed."
 	);
 
@@ -3410,7 +3566,7 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1)
 	unsigned K = A._view[-1];
 
 	// Now we actually multiply the matrices.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -3535,17 +3691,17 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& 
 	};
 
 	// Both tensor must be initialized.
-	TENSOR_CHECK(mat0._internals,
+	TENSOR_CHECK(mat0.is_init(),
 		"Trying to matrix multiply with bias tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(mat1._internals,
+	TENSOR_CHECK(mat1.is_init(),
 		"Trying to matrix multiply with bias tensors while the second tensor is empty."
 	);
-	TENSOR_CHECK(bias._internals,
+	TENSOR_CHECK(bias.is_init(),
 		"Trying to matrix multiply with bias tensors while the bias tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(mat0._internals->is_gpu == mat1._internals->is_gpu && mat1._internals->is_gpu == bias._internals->is_gpu,
+	TENSOR_CHECK(mat0.is_gpu() == mat1.is_gpu() && mat1.is_gpu() == bias.is_gpu(),
 		"Trying to matrix multiply with bias tensors in different devices is not allowed."
 	);
 
@@ -3610,7 +3766,7 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& 
 	unsigned K = A._view[-1];
 
 	// Now we actually multiply the matrices.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -3755,14 +3911,14 @@ Tensor Functional::cat(const Tensor& ten0, const Tensor& ten1, int dim)
 	// --- Sanity checks ---
 
 	// Both tensor must be initialized.
-	TENSOR_CHECK(ten0._internals,
+	TENSOR_CHECK(ten0.is_init(),
 		"Trying to concatenate two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(ten1._internals,
+	TENSOR_CHECK(ten1.is_init(),
 		"Trying to concatenate two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(ten0._internals->is_gpu == ten1._internals->is_gpu,
+	TENSOR_CHECK(ten0.is_gpu() == ten1.is_gpu(),
 		"Trying to concatenate two tensors in different devices is not allowed."
 	);
 	// Both tensor must have the same dimensionality to avoid ambiguity.
@@ -3796,7 +3952,7 @@ Tensor Functional::cat(const Tensor& ten0, const Tensor& ten1, int dim)
 	Tensor out(out_shape, ten0.device(), requires_grad);
 
 	// Now we actually concatenate the tensors.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -3894,14 +4050,14 @@ Tensor Functional::mean_squared_error(const Tensor& ten0, const Tensor& ten1)
 	// --- Sanity checks ---
 
 	// Both tensor must be initialized.
-	TENSOR_CHECK(ten0._internals,
+	TENSOR_CHECK(ten0.is_init(),
 		"Trying to compute MSE of two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(ten1._internals,
+	TENSOR_CHECK(ten1.is_init(),
 		"Trying to compute MSE of two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(ten0._internals->is_gpu == ten1._internals->is_gpu,
+	TENSOR_CHECK(ten0.is_gpu() == ten1.is_gpu(),
 		"Trying to compute MSE of two tensors in different devices is not allowed."
 	);
 	// Both tensor must have the same number of elements.
@@ -3927,7 +4083,7 @@ Tensor Functional::mean_squared_error(const Tensor& ten0, const Tensor& ten1)
 	Tensor out(Shape(1), ten0.device(), requires_grad);
 
 	// Now we actually compute the MSE.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -3986,7 +4142,7 @@ Tensor Functional::cross_entropy_loss(const Tensor& logits, unsigned* labels)
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(logits._internals,
+	TENSOR_CHECK(logits.is_init(),
 		"Trying to apply softmax to an empty tensor."
 	);
 	// Make sure shape is correct.
@@ -4017,7 +4173,7 @@ Tensor Functional::cross_entropy_loss(const Tensor& logits, unsigned* labels)
 	unsigned size = logits._view[0];
 
 	// Now compute the actual cross-entropy loss.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -4098,7 +4254,7 @@ Tensor Functional::negative_log_likelihood(const Tensor& probs, unsigned* labels
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(probs._internals,
+	TENSOR_CHECK(probs.is_init(),
 		"Trying to compute NLL with an empty tensor."
 	);
 	// Make sure shape is correct.
@@ -4126,7 +4282,7 @@ Tensor Functional::negative_log_likelihood(const Tensor& probs, unsigned* labels
 	unsigned size = probs._view[0];
 
 	// Now compute the actual cross-entropy loss.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
@@ -4178,14 +4334,14 @@ Tensor Functional::one_hot(const Shape& shape, unsigned* labels, const char* dev
 	Tensor out(shape, device, false);
 
 	// Now we one-hot these vectors.
-	if (out._internals->is_gpu)
+	if (out.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
+		float* out_data = out.internal_data();
 		// Get relevant stride.
 		const unsigned n_labels = shape[-1];
 		const unsigned n_cases = shape[0];
@@ -4210,14 +4366,14 @@ Tensor Functional::causal_mask(unsigned L, const char* device)
 	Tensor mask(Shape(L, L), device, false);
 
 	// Set values to -inf.
-	if (mask._internals->is_gpu)
+	if (mask.is_gpu())
 	{
 		TENSOR_ERROR("CUDA backend not implemented yet.");
 	}
 	else
 	{
 		// Extract the data.
-		float* out_data = mask._internals->_data;
+		float* out_data = mask.internal_data();
 
 		// Our negative infinity.
 		constexpr float neg_inf = -std::numeric_limits<float>::infinity();
@@ -4311,11 +4467,11 @@ int Random::rand_int(int min, int max)
 
 const Tensor& Initialization::normal(const Tensor& tensor, float mean, float std)
 {
-	TENSOR_CHECK(tensor._internals,
+	TENSOR_CHECK(tensor.is_init(),
 		"Found an empty tensor inside unifor initialization, please make sure your tensor is initialized."
 	);
 
-	float* data = tensor._internals->_data;
+	float* data = tensor.internal_data();
 	const unsigned numel = tensor.numel();
 
 	unsigned idx = 0;
@@ -4327,11 +4483,11 @@ const Tensor& Initialization::normal(const Tensor& tensor, float mean, float std
 
 const Tensor& Initialization::uniform(const Tensor& tensor, float min, float max)
 {
-	TENSOR_CHECK(tensor._internals,
+	TENSOR_CHECK(tensor.is_init(),
 		"Found an empty tensor inside unifor initialization, please make sure your tensor is initialized."
 	);
 
-	float* data = tensor._internals->_data;
+	float* data = tensor.internal_data();
 	const unsigned numel = tensor.numel();
 
 	unsigned idx = 0;
