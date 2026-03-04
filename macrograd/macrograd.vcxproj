@@ -69,7 +69,7 @@
       <CompileOut>$(ProjectDir)lib\$(Configuration)\%(Filename)%(Extension).obj</CompileOut>
     </CudaCompile>
     <Lib>
-      <AdditionalDependencies>cudart_static.lib;</AdditionalDependencies>
+      <AdditionalDependencies>cudart_static.lib;curand.lib;</AdditionalDependencies>
       <AdditionalLibraryDirectories>$(CudaToolkitLibDir)</AdditionalLibraryDirectories>
     </Lib>
   </ItemDefinitionGroup>
@@ -96,7 +96,7 @@
       <CompileOut>$(ProjectDir)lib\$(Configuration)\%(Filename)%(Extension).obj</CompileOut>
     </CudaCompile>
     <Lib>
-      <AdditionalDependencies>cudart_static.lib;</AdditionalDependencies>
+      <AdditionalDependencies>cudart_static.lib;curand.lib;</AdditionalDependencies>
       <AdditionalLibraryDirectories>$(CudaToolkitLibDir)</AdditionalLibraryDirectories>
     </Lib>
   </ItemDefinitionGroup>

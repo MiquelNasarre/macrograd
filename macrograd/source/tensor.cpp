@@ -7,6 +7,9 @@
 #include <string.h>
 #include <new>
 
+// Macro to help with data acess on CPU.
+#define __data ((float*)_internals->_data)
+
 /*
 --------------------------------------------------------------------------------------------------------------------------
  Shape functions
@@ -174,43 +177,42 @@ Tensor::Tensor(const Shape& shape, const char* device, bool requires_grad)
 	_internals = new TensorInternals;
 	_internals->instances++;
 
+	// Copy view and initialize stride.
+	_view = shape;
+	_stride = Shape(shape.dim(), (int*)nullptr);
+
+	// Set strides to size * offset of previous dimension.
+	_stride[-1] = 1u;
+	for (int i = shape.dim() - 2; i >= 0; i--)
+		_stride[i] = shape[i + 1] * _stride[i + 1];
+
+	// Get the total number of elements.
+	_internals->_numel = _stride[0] * shape[0];
+
+	// Get the total data size 64-byte aligned.
+	_internals->_data_size = _internals->_numel * sizeof(float);
+	if (_internals->_data_size % 64 != 0)
+		_internals->_data_size += 64 - _internals->_data_size % 64;
+
+	// Set strides to 0 for unitary dimensions.
+	for (unsigned i = 0; i < shape.dim(); i++)
+		if (_view[i] == 1) _stride[i] = 0;
+
 	snprintf(_internals->device, sizeof(_internals->device), "%s", device);
 
 	if (!strcmp(device, "cpu"))
 	{
 		_internals->is_gpu = false;
-
-		_view = shape;
-		_stride = shape;
-
-		// Set offsets to size * offset of previous dimension.
-		_stride[-1] = 1u;
-		for (int i = shape.dim() - 2; i >= 0; i--)
-			_stride[i] = shape[i + 1] * _stride[i + 1];
-
-		// Get the total number of elements.
-		_internals->_numel = _stride[0] * shape[0];
-
-		// Get the total data size 64-byte aligned.
-		_internals->_data_size = _internals->_numel * sizeof(float);
-		if (_internals->_data_size % 64 != 0)
-			_internals->_data_size += 64 - _internals->_data_size % 64;
-
-		// Set offsets to 0 for unitary dimensions.
-		for (unsigned i = 0; i < shape.dim(); i++)
-			if (_view[i] == 1) _stride[i] = 0;
-
 		// Allocate the data.
-		_internals->_data = (float*)::operator new[](_internals->_data_size, std::align_val_t(64));
-
+		_internals->_data = ::operator new[](_internals->_data_size, std::align_val_t(64));
 		// Be clean and zero it out.
 		memset(_internals->_data, 0, _internals->_data_size);
 	}
 	else if (!strcmp(device, "cuda"))
 	{
 		_internals->is_gpu = true;
-
-		TENSOR_ERROR("CUDA backend is not implemented yet.");
+		// Allocate clean data.
+		_internals->_data = MemPool::allocate(_internals->_data_size);
 	}
 	else TENSOR_ERROR(
 		"Unknown device string found \"%s\".\n"
@@ -245,7 +247,13 @@ float Tensor::item() const
 		"Item can only be called on single element tensors.", numel()
 	);
 
-	return _internals->_data[0];
+	if (is_gpu())
+	{
+		float val;
+		cuda::copy_gpu_to_cpu(&val, _internals->_data, sizeof(float));
+		return val;
+	}
+	else return __data[0];
 }
 
 const char* Tensor::str() const
@@ -316,8 +324,15 @@ const char* Tensor::array_str(const char* fmt) const
 		unsigned idx = 0;
 		for (unsigned d = 0; d < dim(); d++)
 			idx += counting_shape[d] * _stride[d];
-
-		s_print(fmt, _internals->_data[idx]);
+		
+		if (is_gpu())
+		{
+			float val;
+			cuda::copy_gpu_to_cpu(&val, __data + idx, sizeof(float));
+			s_print(fmt, val);
+		}
+		else
+			s_print(fmt, __data[idx]);
 
 		if (++counting_shape[-1] < _view[-1])
 		{
@@ -404,9 +419,7 @@ void Tensor::backward()
 
 	// First set your gradient to 1.
 	if (_internals->is_gpu)
-	{
-		TENSOR_ERROR("CUDA backend is not implemented yet.");
-	}
+		cuda::set_to_one(_internals->gradient->_internals->_data);
 	else
 		((float*)_internals->gradient->_internals->_data)[0] = 1.f;
 
@@ -435,9 +448,8 @@ void Tensor::zero_grad()
 
 	// Do changes on GPU tensors.
 	if (_internals->is_gpu)
-	{
-		TENSOR_ERROR("CUDA backend is not implemented yet.");
-	}
+		cuda::zero_data(_internals->gradient->_internals->_data, _internals->_data_size);
+
 	// Zero the gradient on the CPU.
 	else
 		memset(_internals->gradient->_internals->_data, 0, _internals->_data_size);
@@ -456,7 +468,45 @@ const char* Tensor::get_operator() const
 
 Tensor Tensor::to(const char* device, bool with_grad) const
 {
-	TENSOR_ERROR("CUDA backend is not implemented yet.");
+	// Create output tensor.
+	Tensor out(_view, device, with_grad);
+
+	void* ten_data = _internals->_data;
+	void* out_data = out._internals->_data;
+	unsigned data_size = _internals->_data_size;
+
+	// Distinguish different cases.
+	if (out.is_gpu())
+	{
+		if (is_gpu())	cuda::copy_gpu_to_gpu(out_data, ten_data, data_size);
+		else			cuda::copy_cpu_to_gpu(out_data, ten_data, data_size);
+	}
+	else
+	{
+		if (is_gpu())	cuda::copy_gpu_to_cpu(out_data, ten_data, data_size);
+		else						   memcpy(out_data, ten_data, data_size);
+	}
+
+	// If both have gradient copy it too.
+	if (has_grad() && with_grad)
+	{
+		void* ten_grad = _internals->gradient->_internals->_data;
+		void* out_grad = out._internals->gradient->_internals->_data;
+
+		if (out.is_gpu())
+		{
+			if (is_gpu())	cuda::copy_gpu_to_gpu(out_grad, ten_grad, data_size);
+			else			cuda::copy_cpu_to_gpu(out_grad, ten_grad, data_size);
+		}
+		else
+		{
+			if (is_gpu())	cuda::copy_gpu_to_cpu(out_grad, ten_grad, data_size);
+			else						   memcpy(out_grad, ten_grad, data_size);
+		}
+	}
+
+	// Return tensor.
+	return out;
 }
 
 const Tensor& Tensor::gradient() const
@@ -508,22 +558,22 @@ void Tensor::reduce_instances_count()
 	// If no more instances delete everything.
 	if (!_internals->instances)
 	{
-		// If GPU I'll deal with it when implementig backend.
+		// If GPU free data on the GPU.
 		if (_internals->is_gpu)
-		{
-			TENSOR_ERROR("CUDA backend not implemented yet.");
-		}
+			MemPool::free(_internals->_data);
+
 		// If CPU tensor simply delete all memory stored in data.
 		else
-		{
 			::operator delete[](_internals->_data, std::align_val_t(64));
 
-			if (_internals->op)
-				delete _internals->op;
+		// Delete operator if exists.
+		if (_internals->op)
+			delete _internals->op;
 
-			if (_internals->gradient)
-				delete _internals->gradient;
-		}
+		// Delete gradient if exists.
+		if (_internals->gradient)
+			delete _internals->gradient;
+
 		// Delete the struct itself.
 		delete _internals;
 	}

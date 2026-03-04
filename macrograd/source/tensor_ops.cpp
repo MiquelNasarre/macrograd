@@ -5,6 +5,10 @@
 #include <math.h>
 #include <limits>
 
+// Macro to help with data acess on CPU.
+#define __data				((float*)_internals->_data)
+#define __dataof(tensor)	((float*)(tensor)._internals->_data)
+
 /*
 --------------------------------------------------------------------------------------------------------------------------
  Internal Operators.
@@ -34,9 +38,7 @@ Tensor Tensor::internal_copy(bool with_grad, bool copy_grad) const
 	Tensor out(_view, device(), false);
 
 	if (is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		cuda::copy_gpu_to_gpu(out._internals->_data, _internals->_data, _internals->_data_size);
 	else
 		memcpy(out._internals->_data, _internals->_data, _internals->_data_size);
 
@@ -46,13 +48,11 @@ Tensor Tensor::internal_copy(bool with_grad, bool copy_grad) const
 		if (has_grad() && copy_grad)
 		{
 			if (is_gpu())
-			{
-				TENSOR_ERROR("CUDA backend not implemented yet.");
-			}
+				cuda::copy_gpu_to_gpu(out._internals->gradient->_internals->_data, _internals->gradient->_internals->_data, _internals->_data_size);
+
 			else
 				memcpy(out._internals->gradient->_internals->_data, _internals->gradient->_internals->_data, _internals->_data_size);
 		}
-
 	}
 
 	return out;
@@ -63,16 +63,15 @@ void Tensor::internal_add(float val)
 	TENSOR_CHECK(is_init(),
 		"Trying to internally add to an empty tensor."
 	);
+
+	float* data = __data;
+	const unsigned numel = this->numel();
 	
 	if (is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::add_scalar(data, val, numel);
+
 	else
 	{
-		float* data = _internals->_data;
-		const unsigned numel = this->numel();
-
 		unsigned idx = 0;
 		while (idx < numel)
 			data[idx++] += val;
@@ -85,15 +84,14 @@ void Tensor::internal_multiply(float val)
 		"Trying to internally multiply to an empty tensor."
 	);
 
+	float* data = __data;
+	const unsigned numel = this->numel();
+
 	if (is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::multiply_scalar(data, val, numel);
+
 	else
 	{
-		float* data = _internals->_data;
-		const unsigned numel = this->numel();
-
 		unsigned idx = 0;
 		while (idx < numel)
 			data[idx++] *= val;
@@ -106,15 +104,13 @@ void Tensor::internal_set(float val)
 		"Trying to internally set an empty tensor."
 	);
 
+	float* data = __data;
+	const unsigned numel = this->numel();
+
 	if (is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::set_scalar(data, val, numel);
 	else
 	{
-		float* data = _internals->_data;
-		const unsigned numel = this->numel();
-
 		unsigned idx = 0;
 		while (idx < numel)
 			data[idx++] = val;
@@ -136,16 +132,15 @@ void Tensor::internal_add(const Tensor& other)
 		"Trying to internally add two tensors on different devices."
 	);
 
+	float* data = __data;
+	float* other_data = __dataof(other);
+	const int numel = this->numel();
+
 	if (is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::add_tensor(data, other_data, numel);
+
 	else
 	{
-		float* data = _internals->_data;
-		float* other_data = other._internals->_data;
-		const int numel = this->numel();
-
 		int idx = -1;
 		while (++idx < numel)
 			data[idx] += other_data[idx];
@@ -168,21 +163,18 @@ void Tensor::internal_add_prod(float val, const Tensor& other)
 		"Trying to internally add two tensors on different devices."
 	);
 
+	float* data = __data;
+	float* other_data = __dataof(other);
+	const int numel = this->numel();
+
 	if (is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::add_multiply_scalar_tensor(data, val, other_data, numel);
 	else
 	{
-		float* data = _internals->_data;
-		float* other_data = other._internals->_data;
-		const int numel = this->numel();
-
 		int idx = -1;
 		while (++idx < numel)
 			data[idx] += val * other_data[idx];
 	}
-
 }
 
 void Tensor::internal_subtract(const Tensor& other)
@@ -200,16 +192,14 @@ void Tensor::internal_subtract(const Tensor& other)
 		"Trying to internally subtract two tensors on different devices."
 	);
 
+	float* data = __data;
+	float* other_data = __dataof(other);
+	const int numel = this->numel();
+
 	if (is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::subtract_tensor(data, other_data, numel);
 	else
 	{
-		float* data = _internals->_data;
-		float* other_data = other._internals->_data;
-		const int numel = this->numel();
-
 		int idx = -1;
 		while (++idx < numel)
 			data[idx] -= other_data[idx];
@@ -231,16 +221,14 @@ void Tensor::internal_multiply(const Tensor& other)
 		"Trying to internally multiply two tensors on different devices."
 	);
 
+	float* data = __data;
+	float* other_data = __dataof(other);
+	const int numel = this->numel();
+
 	if (is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::multiply_tensor(data, other_data, numel);
 	else
 	{
-		float* data = _internals->_data;
-		float* other_data = other._internals->_data;
-		const int numel = this->numel();
-
 		int idx = -1;
 		while (++idx < numel)
 			data[idx] *= other_data[idx];
@@ -257,21 +245,18 @@ void Tensor::internal_set_value(const Shape& route, float value)
 		"The tensor shape is %s", _view.str()
 	);
 
-	if (is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
-	else
-	{
-		float* ptr = _internals->_data;
-		for (unsigned d = 0; d < dim(); d++)
-			ptr += ((route[d] + _view[d] * (2 - route[d] / _view[d])) % _view[d]) * _stride[d];
+	float* ptr = __data;
+	for (unsigned d = 0; d < dim(); d++)
+		ptr += ((route[d] + _view[d] * (2 - route[d] / _view[d])) % _view[d]) * _stride[d];
 
+	if (is_gpu())
+		cuda::copy_cpu_to_gpu(ptr, &value, sizeof(float));
+
+	else
 		*ptr = value;
-	}
 }
 
-float Tensor::internal_get_value(const Shape& route)
+float Tensor::internal_get_value(const Shape& route) const
 {
 	TENSOR_CHECK(is_init(),
 		"Trying to get a value on an empty array."
@@ -283,11 +268,17 @@ float Tensor::internal_get_value(const Shape& route)
 
 	if (is_gpu())
 	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
+		float* ptr = __data;
+		for (unsigned d = 0; d < dim(); d++)
+			ptr += ((route[d] + _view[d] * (2 - route[d] / _view[d])) % _view[d]) * _stride[d];
+
+		float val;
+		cuda::copy_gpu_to_cpu(&val, ptr, sizeof(float));
+		return val;
 	}
 	else
 	{
-		float* ptr = _internals->_data;
+		float* ptr = __data;
 		for (unsigned d = 0; d < dim(); d++)
 			ptr += ((route[d] + _view[d] * (2 - route[d] / _view[d])) % _view[d]) * _stride[d];
 
@@ -308,7 +299,7 @@ void Tensor::internal_set_vector(const Shape& route, const float* values)
 	// Get idx given route. Modulo for negative numbers.
 	unsigned idx = 0;
 	for (unsigned i = 0; i < route.dim(); i++)
-		idx += (route[i] + _view[i] * (2 - route[i] / _view[i]) % _view[i]) * _stride[i];
+		idx += ((route[i] + _view[i] * (2 - route[i] / _view[i])) % _view[i]) * _stride[i];
 
 	// Get full data expected size.
 	unsigned _data_size = sizeof(float);
@@ -316,14 +307,10 @@ void Tensor::internal_set_vector(const Shape& route, const float* values)
 		_data_size *= _view[i];
 
 	if (is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		cuda::copy_cpu_to_gpu(__data + idx, values, _data_size);
+
 	else
-	{
-		// Copy given data.
-		memcpy(_internals->_data + idx, values, _data_size);
-	}
+		memcpy(__data + idx, values, _data_size);
 }
 
 float* Tensor::internal_get_vector(const Shape& route)
@@ -332,24 +319,20 @@ float* Tensor::internal_get_vector(const Shape& route)
 		"Trying to get a vector of an empty tensor."
 	);
 	TENSOR_CHECK(numel(),
-		"Trying to fet a vector of a tensor with no values.\n"
+		"Trying to get a vector of a tensor with no values.\n"
 		"The tensor shape is %s", _view.str()
 	);
+	TENSOR_CHECK(!is_gpu(),
+		"Trying to get a vector on a GPU tensor is not allowed.\n"
+	);
 
-	if (is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
-	else
-	{
-		// Get idx given route. Modulo for negative numbers.
-		unsigned idx = 0;
-		for (unsigned i = 0; i < route.dim(); i++)
-			idx += (route[i] + _view[i] * (2 - route[i] / _view[i]) % _view[i]) * _stride[i];
+	// Get idx given route. Modulo for negative numbers.
+	unsigned idx = 0;
+	for (unsigned i = 0; i < route.dim(); i++)
+		idx += ((route[i] + _view[i] * (2 - route[i] / _view[i])) % _view[i]) * _stride[i];
 
-		// Return data ptr.
-		return _internals->_data + idx;
-	}
+	// Return data ptr.
+	return __data + idx;
 }
 
 /*
@@ -567,8 +550,8 @@ Tensor Tensor::transpose(int dim0, int dim1) const
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten_data = _internals->_data;
+		float* out_data = __dataof(out);
+		float* ten_data = __data;
 		// Store the length of the longest dim
 		const unsigned vector_len = _view[dim0];
 		// Create a running shape to count.
@@ -697,8 +680,8 @@ Tensor Tensor::subset(const Shape& shape, const Shape& start_indices) const
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten_data = _internals->_data;
+		float* out_data = __dataof(out);
+		float* ten_data = __data;
 		// Find the last non-unitary dimension to iterate through.
 		unsigned last_long_dim = 0;
 		for (unsigned i = 0; i < shape.dim(); i++)
@@ -838,8 +821,8 @@ Tensor Tensor::modify(const Tensor& other, const Shape& start_indices) const
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* mod_data = other._internals->_data;
+		float* out_data = __dataof(out);
+		float* mod_data = __dataof(other);
 		// Find the last non-unitary dimension to iterate through.
 		unsigned last_long_dim = 0;
 		for (unsigned i = 0; i < dim(); i++)
@@ -951,8 +934,8 @@ Tensor Tensor::repeat(int dim, unsigned repetitions) const
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten_data = _internals->_data;
+		float* out_data = __dataof(out);
+		float* ten_data = __data;
 		// Get relevant strides.
 		const unsigned elem_stride = out._stride[dim];
 		const unsigned post_stride = elem_stride * repetitions;
@@ -1005,14 +988,12 @@ Tensor Tensor::sign() const
 
 	// Now we actually add signs to the tensor.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::sign(__dataof(out), __data, out.numel());
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten_data = _internals->_data;
+		float* out_data = __dataof(out);
+		float* ten_data = __data;
 		// Iterate through data.
 		int idx = -1, _numel = int(numel());
 		while (++idx < _numel)
@@ -1056,14 +1037,12 @@ Tensor Tensor::exp() const
 
 	// Now we actually exponentiate the tensor.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::exp(__dataof(out), __data, out.numel());
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten_data = _internals->_data;
+		float* out_data = __dataof(out);
+		float* ten_data = __data;
 		// Iterate through all elements.
 		int idx = -1, _numel = int(numel());
 		while (++idx < _numel)
@@ -1111,14 +1090,12 @@ Tensor Tensor::log() const
 
 	// Now we actually log the tensors.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::log(__dataof(out), __data, out.numel());
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten_data = _internals->_data;
+		float* out_data = __dataof(out);
+		float* ten_data = __data;
 		// Iterate through all elements.
 		int idx = -1, _numel = int(numel());
 		while (++idx < _numel)
@@ -1166,14 +1143,12 @@ Tensor Tensor::relu() const
 
 	// Now we actually ReLU the tensors.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::relu(__dataof(out), __data, out.numel());
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten_data = _internals->_data;
+		float* out_data = __dataof(out);
+		float* ten_data = __data;
 		// Iterate through all elements.
 		int idx = -1, _numel = int(numel());
 		while (++idx < _numel)
@@ -1221,14 +1196,12 @@ Tensor Tensor::silu() const
 
 	// Now we actually SiLU the tensors.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::silu(__dataof(out), __data, out.numel());
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten_data = _internals->_data;
+		float* out_data = __dataof(out);
+		float* ten_data = __data;
 		// Iterate through all elements.
 		int idx = -1, _numel = int(numel());
 		while (++idx < _numel)
@@ -1281,15 +1254,13 @@ Tensor Tensor::gelu() const
 
 	// Now we actually GELU the tensor.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::gelu(__dataof(out), __data, out.numel());
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* Phi_data = Phi._internals->_data;
-		float* ten_data = _internals->_data;
+		float* out_data = __dataof(out);
+		float* Phi_data = __dataof(Phi);
+		float* ten_data = __data;
 		// Iterate through all elements.
 		int idx = -1, _numel = int(numel());
 		while (++idx < _numel)
@@ -1342,14 +1313,12 @@ Tensor Tensor::sigmoid() const
 
 	// Now we actually sigmoid the tensor.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::sigmoid(__dataof(out), __data, out.numel());
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten_data = _internals->_data;
+		float* out_data = __dataof(out);
+		float* ten_data = __data;
 		// Iterate through all elements.
 		int idx = -1, _numel = int(numel());
 		while (++idx < _numel)
@@ -1397,14 +1366,12 @@ Tensor Tensor::tanh() const
 
 	// Now we actually tanh the tensor.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::tanh(__dataof(out), __data, out.numel());
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten_data = _internals->_data;
+		float* out_data = __dataof(out);
+		float* ten_data = __data;
 		// Iterate through all elements.
 		int idx = -1, _numel = int(numel());
 		while (++idx < _numel)
@@ -1455,14 +1422,12 @@ Tensor Tensor::sqrt() const
 
 	// Now we actually sqrt the tensor.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::sqrt(__dataof(out), __data, out.numel());
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten_data = _internals->_data;
+		float* out_data = __dataof(out);
+		float* ten_data = __data;
 		// Iterate through all elements.
 		int idx = -1, _numel = int(numel());
 		while (++idx < _numel)
@@ -1510,14 +1475,12 @@ Tensor Tensor::square() const
 
 	// Now we actually square the tensor.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::square(__dataof(out), __data, out.numel());
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten_data = _internals->_data;
+		float* out_data = __dataof(out);
+		float* ten_data = __data;
 		// Iterate through all elements.
 		int idx = -1, _numel = int(numel());
 		while (++idx < _numel)
@@ -1569,14 +1532,12 @@ Tensor Tensor::pow(float exp) const
 
 	// Now we actually power the tensor.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::pow(__dataof(out), __data, exp, out.numel());
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten_data = _internals->_data;
+		float* out_data = __dataof(out);
+		float* ten_data = __data;
 		// Iterate through all elements.
 		int idx = -1, _numel = int(numel());
 		while (++idx < _numel)
@@ -1642,8 +1603,8 @@ Tensor Tensor::mean(int dim, bool keepdim) const
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten_data = _internals->_data;
+		float* out_data = __dataof(out);
+		float* ten_data = __data;
 		// Get relevant strides.
 		const unsigned elem_stride = _stride[dim];
 		const unsigned post_stride = elem_stride * _size;
@@ -1733,8 +1694,8 @@ Tensor Tensor::var(int dim, bool keepdim) const
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten_data = _internals->_data;
+		float* out_data = __dataof(out);
+		float* ten_data = __data;
 		// Get relevant strides.
 		const unsigned elem_stride = _stride[dim];
 		const unsigned post_stride = elem_stride * _size;
@@ -1831,8 +1792,8 @@ Tensor Tensor::std(int dim, bool keepdim) const
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten_data = _internals->_data;
+		float* out_data = __dataof(out);
+		float* ten_data = __data;
 		// Get relevant strides.
 		const unsigned elem_stride = _stride[dim];
 		const unsigned post_stride = elem_stride * _size;
@@ -1925,8 +1886,8 @@ Tensor Tensor::sum(int dim, bool keepdim) const
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten_data = _internals->_data;
+		float* out_data = __dataof(out);
+		float* ten_data = __data;
 		// Get relevant strides.
 		const unsigned elem_stride = _stride[dim];
 		const unsigned post_stride = elem_stride * _size;
@@ -2014,8 +1975,8 @@ Tensor Tensor::softmax(int dim) const
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten_data = _internals->_data;
+		float* out_data = __dataof(out);
+		float* ten_data = __data;
 		// Get relevant strides.
 		const unsigned elem_stride = _stride[dim];
 		const unsigned post_stride = elem_stride * _size;
@@ -2140,9 +2101,9 @@ Tensor operator+(const Tensor& ten0, const Tensor& ten1)
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten0_data = ten0._internals->_data;
-		float* ten1_data = ten1_summed._internals->_data;
+		float* out_data = __dataof(out);
+		float* ten0_data = __dataof(ten0);
+		float* ten1_data = __dataof(ten1_summed);
 		// Exptract the shapes.
 		Shape out_shape = out.shape();
 		Shape ten0_shape = ten0.shape();
@@ -2281,9 +2242,9 @@ Tensor operator-(const Tensor& ten0, const Tensor& ten1)
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten0_data = ten0._internals->_data;
-		float* ten1_data = ten1_summed._internals->_data;
+		float* out_data = __dataof(out);
+		float* ten0_data = __dataof(ten0);
+		float* ten1_data = __dataof(ten1_summed);
 		// Exptract the shapes.
 		Shape out_shape = out.shape();
 		Shape ten0_shape = ten0.shape();
@@ -2422,9 +2383,9 @@ Tensor operator*(const Tensor& ten0, const Tensor& ten1)
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten0_data = ten0._internals->_data;
-		float* ten1_data = ten1_summed._internals->_data;
+		float* out_data = __dataof(out);
+		float* ten0_data = __dataof(ten0);
+		float* ten1_data = __dataof(ten1_summed);
 		// Exptract the shapes.
 		Shape out_shape = out.shape();
 		Shape ten0_shape = ten0.shape();
@@ -2563,9 +2524,9 @@ Tensor operator/(const Tensor& ten0, const Tensor& ten1)
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten0_data = ten0._internals->_data;
-		float* ten1_data = ten1_summed._internals->_data;
+		float* out_data = __dataof(out);
+		float* ten0_data = __dataof(ten0);
+		float* ten1_data = __dataof(ten1_summed);
 		// Exptract the shapes.
 		Shape out_shape = out.shape();
 		Shape ten0_shape = ten0.shape();
@@ -2669,8 +2630,8 @@ Tensor operator+(const Tensor& ten, float val)
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten_data = ten._internals->_data;
+		float* out_data = __dataof(out);
+		float* ten_data = __dataof(ten);
 		// Iterate through all elements.
 		int idx = -1, _numel = int(ten.numel());
 		while (++idx < _numel)
@@ -2732,8 +2693,8 @@ Tensor operator*(const Tensor& ten, float val)
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten_data = ten._internals->_data;
+		float* out_data = __dataof(out);
+		float* ten_data = __dataof(ten);
 		// Iterate through all elements.
 		int idx = -1, _numel = int(ten.numel());
 		while (++idx < _numel)
@@ -2797,8 +2758,8 @@ Tensor operator-(float val, const Tensor& ten)
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten_data = ten._internals->_data;
+		float* out_data = __dataof(out);
+		float* ten_data = __dataof(ten);
 		// Iterate through all elements.
 		int idx = -1, _numel = int(ten.numel());
 		while (++idx < _numel)
@@ -2857,8 +2818,8 @@ Tensor operator/(float val, const Tensor& ten)
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten_data = ten._internals->_data;
+		float* out_data = __dataof(out);
+		float* ten_data = __dataof(ten);
 		// Iterate through all elements.
 		int idx = -1, _numel = int(ten.numel());
 		while (++idx < _numel)
@@ -2912,8 +2873,8 @@ Tensor Tensor::operator-() const
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten_data = _internals->_data;
+		float* out_data = __dataof(out);
+		float* ten_data = __data;
 		// Iterate through all elements.
 		int idx = -1, _numel = int(numel());
 		while (++idx < _numel)
@@ -2989,8 +2950,8 @@ Tensor& Tensor::operator+=(const Tensor& other)
 	else
 	{
 		// Extract the data.
-		float* out_data = _internals->_data;
-		float* oth_data = other_summed._internals->_data;
+		float* out_data = __data;
+		float* oth_data = __dataof(other_summed);
 		// Exptract the shapes.
 		Shape out_shape = shape();
 		Shape oth_shape = other_summed.shape();
@@ -3103,8 +3064,8 @@ Tensor& Tensor::operator-=(const Tensor& other)
 	else
 	{
 		// Extract the data.
-		float* out_data = _internals->_data;
-		float* oth_data = other_summed._internals->_data;
+		float* out_data = __data;
+		float* oth_data = __dataof(other_summed);
 		// Exptract the shapes.
 		Shape out_shape = shape();
 		Shape oth_shape = other_summed.shape();
@@ -3217,8 +3178,8 @@ Tensor& Tensor::operator*=(const Tensor& other)
 	else
 	{
 		// Extract the data.
-		float* out_data = _internals->_data;
-		float* oth_data = other_summed._internals->_data;
+		float* out_data = __data;
+		float* oth_data = __dataof(other_summed);
 		// Exptract the shapes.
 		Shape out_shape = shape();
 		Shape oth_shape = other_summed.shape();
@@ -3331,8 +3292,8 @@ Tensor& Tensor::operator/=(const Tensor& other)
 	else
 	{
 		// Extract the data.
-		float* out_data = _internals->_data;
-		float* oth_data = other_summed._internals->_data;
+		float* out_data = __data;
+		float* oth_data = __dataof(other_summed);
 		// Exptract the shapes.
 		Shape out_shape = shape();
 		Shape oth_shape = other_summed.shape();
@@ -3416,7 +3377,7 @@ Tensor& Tensor::operator+=(float val)
 	else
 	{
 		// Extract the data.
-		float* out_data = _internals->_data;
+		float* out_data = __data;
 		// Iterate through all elements.
 		int idx = -1, _numel = int(numel());
 		while (++idx < _numel)
@@ -3456,7 +3417,7 @@ Tensor& Tensor::operator*=(float val)
 	else
 	{
 		// Extract the data.
-		float* out_data = _internals->_data;
+		float* out_data = __data;
 		// Iterate through all elements.
 		int idx = -1, _numel = int(numel());
 		while (++idx < _numel)
@@ -3573,9 +3534,9 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1)
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* A_data = A._internals->_data;
-		float* B_data = B._internals->_data;
+		float* out_data = __dataof(out);
+		float* A_data = __dataof(A);
+		float* B_data = __dataof(B);
 		// Create a running shape to count.
 		Shape counting_shape(out_shape.dim() > 2 ? out_shape.dim() - 2 : 1, (int*)nullptr);
 		// Create reference shape.
@@ -3773,10 +3734,10 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& 
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* A_data = A._internals->_data;
-		float* B_data = B._internals->_data;
-		float* b_data = b._internals->_data;
+		float* out_data = __dataof(out);
+		float* A_data = __dataof(A);
+		float* B_data = __dataof(B);
+		float* b_data = __dataof(b);
 		// Get bias last dimensions strides.
 		unsigned bm_stride = b._stride[-2];
 		unsigned bn_stride = b._stride[-1];
@@ -3959,9 +3920,9 @@ Tensor Functional::cat(const Tensor& ten0, const Tensor& ten1, int dim)
 	else
 	{
 		// Extract the data.
-		float* out_data = out._internals->_data;
-		float* ten0_data = ten0._internals->_data;
-		float* ten1_data = ten1._internals->_data;
+		float* out_data = __dataof(out);
+		float* ten0_data = __dataof(ten0);
+		float* ten1_data = __dataof(ten1);
 		// Get relevant sizes.
 		unsigned prev_size = 1u;
 		unsigned post_size = 1u;
@@ -4090,9 +4051,9 @@ Tensor Functional::mean_squared_error(const Tensor& ten0, const Tensor& ten1)
 	else
 	{
 		// Extract the data.
-		float& out_data = *out._internals->_data;
-		float* y0_data = y0._internals->_data;
-		float* y1_data = y1._internals->_data;
+		float& out_data = *__dataof(out);
+		float* y0_data = __dataof(y0);
+		float* y1_data = __dataof(y1);
 		// Iterate through entire length.
 		int idx = -1;
 		while (++idx < size)
@@ -4180,9 +4141,9 @@ Tensor Functional::cross_entropy_loss(const Tensor& logits, unsigned* labels)
 	else
 	{
 		// Extract the data.
-		float& out_data = *out._internals->_data;
-		float* probs_data = probs._internals->_data;
-		float* logits_data = logits._internals->_data;
+		float& out_data = *__dataof(out);
+		float* probs_data = __dataof(probs);
+		float* logits_data = __dataof(logits);
 		// Get relevant stride.
 		const unsigned n_labels = logits._view[-1];
 		// Add all loss values and compute all probs.
@@ -4289,8 +4250,8 @@ Tensor Functional::negative_log_likelihood(const Tensor& probs, unsigned* labels
 	else
 	{
 		// Extract the data.
-		float& out_data = *out._internals->_data;
-		float* probs_data = probs._internals->_data;
+		float& out_data = *__dataof(out);
+		float* probs_data = __dataof(probs);
 		// Get relevant stride.
 		const unsigned n_labels = probs._view[-1];
 		// Add all loss values.
@@ -4431,6 +4392,11 @@ void Random::set_seed(unsigned long long seed)
 	_seed = seed;
 }
 
+void Random::set_cuda_seed(unsigned long long seed)
+{
+	kernel_ops::set_seed(seed);
+}
+
 // Uses a randomizer to generate a shuffled set of integers from 0 to size.
 
 void Random::shuffle(unsigned size, int* data)
@@ -4474,10 +4440,14 @@ const Tensor& Initialization::normal(const Tensor& tensor, float mean, float std
 	float* data = tensor.internal_data();
 	const unsigned numel = tensor.numel();
 
-	unsigned idx = 0;
-	while (idx < numel)
-		data[idx++] = random_norm() * std + mean;
-
+	if (tensor.is_gpu())
+		kernel_ops::normal(data, mean, std, numel);
+	else
+	{
+		unsigned idx = 0;
+		while (idx < numel)
+			data[idx++] = random_norm() * std + mean;
+	}
 	return tensor;
 }
 
@@ -4490,9 +4460,13 @@ const Tensor& Initialization::uniform(const Tensor& tensor, float min, float max
 	float* data = tensor.internal_data();
 	const unsigned numel = tensor.numel();
 
-	unsigned idx = 0;
-	while(idx < numel)
-		data[idx++] = random_0_1() * (max - min) + min;
-	
+	if (tensor.is_gpu())
+		kernel_ops::uniform(data, min, max, numel);
+	else
+	{
+		unsigned idx = 0;
+		while(idx < numel)
+			data[idx++] = random_0_1() * (max - min) + min;
+	}
 	return tensor;
 }

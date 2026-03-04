@@ -47,6 +47,7 @@ namespace Functional
 namespace Random
 {
 	void set_seed(unsigned long long seed);
+	void set_cuda_seed(unsigned long long seed);
 	void shuffle(unsigned size, int* data);
 	float rand_normal(float mean, float std);
 	float rand_uniform(float min, float max);
@@ -118,7 +119,7 @@ private:
 		// Tensor is properly destroyed.
 		unsigned instances = 0u;
 
-		float* _data = nullptr;		// Pointer to the internal tensor values.
+		void* _data = nullptr;		// Pointer to the internal tensor values.
 		unsigned _numel = 0u;		// Total number of element in the array.
 		unsigned _data_size = 0u;	// Total byte size of the array data.
 
@@ -170,7 +171,7 @@ public:
 	// Internal helpers to modify data without affecting anything else. If using tensors numel must match. 
 	// Functions are public for convenience but they cannot be used inside neural networks logic.
 
-	float* internal_data() const { return _internals ? _internals->_data : nullptr; }
+	float* internal_data() const { return _internals ? (float*)_internals->_data : nullptr; }
 
 	Tensor& internal_gradient();
 	Tensor internal_copy(bool with_grad, bool copy_grad) const;
@@ -185,7 +186,7 @@ public:
 	void internal_multiply(const Tensor& other);
 
 	void internal_set_value(const Shape& route, float value);
-	float internal_get_value(const Shape& route);
+	float internal_get_value(const Shape& route) const;
 	void internal_set_vector(const Shape& route, const float* values);
 	float* internal_get_vector(const Shape& route);
 
