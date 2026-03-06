@@ -25,6 +25,9 @@ public:
 	int&		operator[](int dim)			{ return _sizes[mod(dim, _dim)]; }
 	const int&	operator[](int dim) const	{ return _sizes[mod(dim, _dim)]; }
 
+	// Checks if all individual dimensions match.
+	bool operator==(const Shape& other) const;
+
 	void remove(int dim);
 	void add(int dim, int size);
 
@@ -225,10 +228,10 @@ public:
 	Tensor sqrt() const;
 	Tensor square() const;
 	Tensor pow(float exp) const;
+	Tensor sum(int dim, bool keepdim = false) const;
 	Tensor mean(int dim, bool keepdim = false) const;
 	Tensor var(int dim, bool keepdim = false) const;
 	Tensor std(int dim, bool keepdim = false) const;
-	Tensor sum(int dim, bool keepdim = false) const;
 	Tensor softmax(int dim) const;
 
 	// --- Regular operators ---

@@ -416,9 +416,6 @@ Tensor Tensor::view(const Shape& shape) const
 	new_stride[-1] = 1;
 	for (int i = new_shape.dim() - 2; i >= 0; i--)
 		new_stride[i] = new_shape[i + 1] * new_stride[i + 1];
-	for (unsigned i = 0; i < new_shape.dim(); i++)
-		if (new_shape[i] == 1)
-			new_stride[i] = 0;
 	
 	// Create output with new shape and stride.
 	Tensor out = *this;
@@ -440,7 +437,7 @@ Tensor Tensor::flatten() const
 	// Create output tensor with flat view.
 	Tensor out = *this;
 	out._view = Shape(numel());
-	out._stride = Shape(numel() > 1u ? 1u : 0u);
+	out._stride = Shape(1);
 
 	// Return out.
 	return out;
@@ -476,9 +473,12 @@ Tensor Tensor::unsqueeze(int dim) const
 		"Trying to call unsqueeze on an empty tensor."
 	);
 
+	// Modulo dim with an extra dim considered.
+	dim = ((dim % (_view.dim() + 1)) + (_view.dim() + 1)) % (_view.dim() + 1);
+
 	Tensor copied = *this;
 	copied._view.add(dim, 1);
-	copied._stride.add(dim, 0);
+	copied._stride.add(dim, (dim < int(_stride.dim())) ? _stride[dim] : 1);
 
 	return copied;
 }
@@ -526,8 +526,12 @@ Tensor Tensor::transpose(int dim0, int dim1) const
 	dim0 = unsigned(dim0 + dim() * (2 - dim0 / int(dim()))) % dim();
 	dim1 = unsigned(dim1 + dim() * (2 - dim1 / int(dim()))) % dim();
 
-	// Find out which dimension is the longest and set it to dim0.
-	if (_view[dim1] > _view[dim0])
+	// If its the same dimension just return.
+	if (dim0 == dim1)
+		return *this;
+
+	// Find out which dimension is the first one and set it to dim0.
+	if (dim0 > dim1)
 	{
 		int temp = dim0;
 		dim0 = dim1;
@@ -542,61 +546,49 @@ Tensor Tensor::transpose(int dim0, int dim1) const
 	// Create output with the transposed shape.
 	Tensor out(out_shape, device(), has_grad());
 
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten_data = __data;
+	// Store the length of the dimensions.
+	const unsigned A = _view[dim0];
+	const unsigned B = _view[dim1];
+	// Tensor sizes data.
+	const unsigned inner_size = _stride[dim1];
+	const unsigned middle_size = _stride[dim0] / (B * inner_size);
+	const unsigned outter_size = numel() / (A * _stride[dim0]);
+	// Tensor strides data.
+	const unsigned out_stride = out._stride[dim0];
+	const unsigned ten_stride = _stride[dim0];
+
+	const unsigned outter_stride = A * ten_stride;
+
+
 	// Now we actually transpose the tensor.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::transpose(out_data, ten_data, A, B, outter_stride, middle_size, inner_size, ten_stride, out_stride);
 	else
 	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten_data = __data;
-		// Store the length of the longest dim
-		const unsigned vector_len = _view[dim0];
-		// Create a running shape to count.
-		Shape counting_shape(dim(), (int*)nullptr);
-		// Create a refenrece shape with the longest dimension removed.
-		Shape reference = _view;
-		reference[dim0] = 1;
-		// Get the stride for both tensors in the long dimension.
-		unsigned ten_stride = _stride[dim0];
-		unsigned out_stride = out._stride[dim1];
-
-		// Iterate through vectors.
-		while (true)
+		for (unsigned outter = 0; outter < outter_size; outter++)
+		for (unsigned middle = 0; middle < middle_size; middle++)
+		for (unsigned inner  = 0; inner  <  inner_size;  inner++)
 		{
-			unsigned ten_idx = 0;
-			for (unsigned d = 0; d < counting_shape.dim(); d++)
-				ten_idx += counting_shape[d] * _stride[d];
+			unsigned ten_idx = outter * outter_stride + middle * inner_size * B + inner;
+			unsigned out_idx = outter * outter_stride + middle * inner_size * A + inner;
 
-			unsigned out_idx = 0;
-			for (unsigned d = 0; d < counting_shape.dim(); d++)
+			for (unsigned i = 0; i < A; i++)
 			{
-				if (d == dim1)	out_idx += counting_shape[d] * out._stride[dim0];
-				else			out_idx += counting_shape[d] * out._stride[d];
-			}
+				unsigned running_ten_idx = ten_idx;
+				unsigned running_out_idx = out_idx;
 
-			unsigned count = 0u;
-			while (count++ < vector_len)
-			{
-				out_data[out_idx] = ten_data[ten_idx];
-				out_idx += out_stride, ten_idx += ten_stride;
-			}
-
-			counting_shape[-1]++;
-
-			for (int d = dim() - 1; d > 0; d--)
-			{
-				if (counting_shape[d] >= reference[d])
+				for (unsigned j = 0; j < B; j++)
 				{
-					counting_shape[d] -= reference[d];
-					counting_shape[d - 1]++;
+					out_data[running_out_idx] = ten_data[running_ten_idx];
+					running_ten_idx += inner_size;
+					running_out_idx += out_stride;
 				}
+				ten_idx += ten_stride;
+				out_idx += inner_size;
 			}
-			// If you reach the end of the leading dimension you're done.
-			if (counting_shape[0] >= reference[0])
-				break;
 		}
 	}
 
@@ -640,59 +632,80 @@ Tensor Tensor::subset(const Shape& shape, const Shape& start_indices) const
 	TENSOR_CHECK(is_init(),
 		"Trying to subset an empty tensor."
 	);
-	TENSOR_CHECK(shape.dim() == dim(),
+
+	// Shapes for processing
+	Shape new_shape = shape;
+	Shape start = start_indices;
+
+	// Modulo indices.
+	for (unsigned i = 0; i < start.dim(); i++)
+		start[i] = unsigned(start_indices[i] + _view[i] * (2 - start_indices[i] / int(_view[i]))) % _view[i];
+
+	// If missing assume starts at 0.
+	while (start.dim() < dim())
+		start.add(-1, 0);
+
+	// If -1 assume full size.
+	for (unsigned i = 0; i < new_shape.dim(); i++)
+		if (new_shape[i] == -1)
+			new_shape[i] = _view[i];
+
+	// If missing dimensions assume full size.
+	while (new_shape.dim() < dim())
+		new_shape.add(-1, _view[new_shape.dim()]);
+
+	// Sanity checks.
+	TENSOR_CHECK(new_shape.dim() == dim(),
 		"Trying to call subset with a shape of different dimensionality.\n"
-		"Make sure the number of dimensions matches, later you can squeeze out unitary ones.\n"
+		"Make sure you don't introduce a shape larger than the original.\n"
 		"Tensor Shape: %s | Subset Shape: %s", _view.str(), shape.str()
 	);
-	TENSOR_CHECK(start_indices.dim() == dim(),
+	TENSOR_CHECK(start.dim() == dim(),
 		"Trying to call subset with a start_indices shape of different dimensionality.\n"
-		"Make sure you indicate the starting index of all dimensions without ambiguity.\n"
+		"Make sure you don't introduce an indices shape larger than the original.\n"
 		"Tensor Shape: %s | Start Indices: %s", _view.str(), start_indices.str()
 	);
 	for (unsigned i = 0; i < dim(); i++)
-		TENSOR_CHECK(shape[i] >= 0,
+		TENSOR_CHECK(new_shape[i] >= 0,
 			"Negative dimensions in a subset shape call.\n"
-			"Please make sure all dimensions are positive to avoid ambiguity.\n"
+			"Please make sure all dimensions are positive or -1 (full size) to avoid ambiguity.\n"
 			"Tensor Shape: %s | Subset Shape: %s", _view.str(), shape.str()
 		);
 
-	// Modulo indices.
-	Shape start = start_indices;
 	for (unsigned i = 0; i < dim(); i++)
-		start[i] = unsigned(start_indices[i] + _view[i] * (2 - start_indices[i] / int(_view[i]))) % _view[i];
-
-	for (unsigned i = 0; i < dim(); i++)
-		TENSOR_CHECK(shape[i] + start[i] <= _view[i],
+		TENSOR_CHECK(new_shape[i] + start[i] <= _view[i],
 			"Out of bounds dimension for a subset call.\n"
 			"Start indices are not compatible with subset and input shape.\n"
-			"Tensor Shape: %s | Subset Shape: %s | Modulo Start Indices: %s", _view.str(), shape.str(), start.str()
+			"Tensor Shape: %s | Processed Subset Shape: %s | Processed Start Indices: %s", _view.str(), new_shape.str(), start.str()
 		);
 
+	// If you subset the full thing just return yourself.
+	if (new_shape == _view)
+		return *this;
+
 	// Create output with the subset shape.
-	Tensor out(shape, device(), has_grad());
+	Tensor out(new_shape, device(), has_grad());
+
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten_data = __data;
 
 	// Now we actually subset the tensor.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::subset(new_shape, _view, start, out_data, ten_data);
 	else
 	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten_data = __data;
 		// Find the last non-unitary dimension to iterate through.
 		unsigned last_long_dim = 0;
-		for (unsigned i = 0; i < shape.dim(); i++)
-			if (shape[i] > 1)
+		for (unsigned i = 0; i < new_shape.dim(); i++)
+			if (new_shape[i] > 1)
 				last_long_dim = i;
 		// Store the length of the longest dim
-		const unsigned vector_len = shape[last_long_dim];
+		const unsigned vector_len = new_shape[last_long_dim];
 		// Create a running shape to count.
 		Shape counting_shape(dim(), (int*)nullptr);
 		// Create a refenrece shape with the long dimension removed.
-		Shape reference = shape;
+		Shape reference = new_shape;
 		reference[last_long_dim] = 1;
 		// Get the stride for both tensors in the long dimension.
 		unsigned ten_stride = _stride[last_long_dim];
@@ -708,23 +721,20 @@ Tensor Tensor::subset(const Shape& shape, const Shape& start_indices) const
 				ten_idx += (counting_shape[d] + start[d]) * _stride[d];
 			}
 
-			unsigned count = 0u;
-			while (count++ < vector_len)
+			for (unsigned count = 0u; count < vector_len; count++)
 			{
 				out_data[out_idx] = ten_data[ten_idx];
 				out_idx += out_stride, ten_idx += ten_stride;
 			}
 
 			counting_shape[-1]++;
-
 			for (int d = dim() - 1; d > 0; d--)
-			{
 				if (counting_shape[d] >= reference[d])
 				{
 					counting_shape[d] -= reference[d];
 					counting_shape[d - 1]++;
 				}
-			}
+
 			// If you reach the end of the leading dimension you're done.
 			if (counting_shape[0] >= reference[0])
 				break;
@@ -782,90 +792,116 @@ Tensor Tensor::modify(const Tensor& other, const Shape& start_indices) const
 	TENSOR_CHECK(is_gpu() == other.is_gpu(),
 		"Trying to add madify a tensor with another tensor on a different device."
 	);
-	TENSOR_CHECK(other._view.dim() == dim(),
-		"Trying to call modify with modification tensor of different dimensionality.\n"
-		"Make sure the number of dimensions matches, unsqueeze unitary ones as needed.\n"
-		"Tensor Shape: %s | Modifier Shape: %s", _view.str(), other._view.str()
-	);
-	TENSOR_CHECK(start_indices.dim() == dim(),
-		"Trying to call subset with a start_indices shape of different dimensionality.\n"
-		"Make sure you indicate the starting index of all dimensions without ambiguity.\n"
-		"Tensor Shape: %s | Start Indices: %s", _view.str(), start_indices.str()
-	);
+
+	// Get new variables to adjust shapes.
+	Shape shape = other._view;
+	Shape stride = other._stride;
+	Shape out_shape = _view;
+	Shape out_stride = _stride;
+	Shape start = start_indices;
 
 	// Modulo indices.
-	Shape start = start_indices;
-	for (unsigned i = 0; i < dim(); i++)
-		start[i] = unsigned(start_indices[i] + _view[i] * (2 - start_indices[i] / int(_view[i]))) % _view[i];
+	for (unsigned i = 0; i < start.dim(); i++)
+		start[i] = ((start_indices[i] % _view[i]) + _view[i]) % _view[i];
 
+	// If missing assume starts at 0.
+	while (start.dim() < dim())
+		start.add(-1, 0);
+
+	// If missing dimensions assume single element from prev dimensions.
+	while (shape.dim() < dim())
+	{
+		shape.add(0, 1);
+		stride.add(0, stride[0]);
+	}
+
+	TENSOR_CHECK(shape.dim() == dim(),
+		"Trying to call modify with modification tensor of different dimensionality.\n"
+		"Make sure the number of dimensions is equal or smaller to the original tensor.\n"
+		"Tensor Shape: %s | Modifier Shape: %s", _view.str(), other._view.str()
+	);
+	TENSOR_CHECK(start.dim() == dim(),
+		"Trying to call subset with a start_indices shape of different dimensionality.\n"
+		"Make sure the number of idx dimensions is equal or smaller to the original tensor.\n"
+		"Tensor Shape: %s | Start Indices: %s", _view.str(), start_indices.str()
+	);
 	for (unsigned i = 0; i < dim(); i++)
-		TENSOR_CHECK(other._view[i] + start[i] <= _view[i],
+		TENSOR_CHECK(shape[i] + start[i] <= _view[i],
 			"Out of bounds dimension for a modify call.\n"
 			"Start indices are not compatible with modifier and input shape.\n"
-			"Tensor Shape: %s | Modifier Shape: %s | Modulo Start Indices: %s", _view.str(), other._view.str(), start.str()
+			"Tensor Shape: %s | Processed Modifier Shape: %s | Processed Start Indices: %s", _view.str(), shape.str(), start.str()
 		);
+
+	// If youre substituting the whole thin just return other.
+	if (shape == out_shape)
+		return other;
 
 	// Get gradient data.
 	bool requires_grad = has_grad() || other.has_grad();
 
 	// Create output same as input.
 	Tensor out = internal_copy(requires_grad, false);
-	out._view = _view;
-	out._stride = _stride;
+
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* mod_data = __dataof(other);
+
+	// Discard unitary dimensions and move out pointer forward.
+	while (shape[0] == 1 && shape.dim() > 1)
+	{
+		out_data += out_stride[0] * start[0];
+		shape.remove(0);
+		stride.remove(0);
+		out_shape.remove(0);
+		out_stride.remove(0);
+		start.remove(0);
+	}
 
 	// Now we actually modify the tensor.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::modify(out_shape, shape, out_stride, start, out_data, mod_data);
 	else
 	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* mod_data = __dataof(other);
 		// Find the last non-unitary dimension to iterate through.
 		unsigned last_long_dim = 0;
-		for (unsigned i = 0; i < dim(); i++)
-			if (other._view[i] > 1)
+		for (unsigned i = 0; i < shape.dim(); i++)
+			if (shape[i] > 1)
 				last_long_dim = i;
 		// Store the length of the longest dim
-		const unsigned vector_len = other._view[last_long_dim];
+		const unsigned vector_len = shape[last_long_dim];
 		// Create a running shape to count.
-		Shape counting_shape(dim(), (int*)nullptr);
+		Shape counting_shape(shape.dim(), (int*)nullptr);
 		// Create a refenrece shape with the long dimension removed.
-		Shape reference = other._view;
+		Shape reference = shape;
 		reference[last_long_dim] = 1;
 		// Get the stride for both tensors in the long dimension.
-		unsigned mod_stride = other._stride[last_long_dim];
-		unsigned out_stride = out._stride[last_long_dim];
+		unsigned mod_str = stride[last_long_dim];
+		unsigned out_str = out_stride[last_long_dim];
 
 		// Iterate through vectors.
 		while (true)
 		{
 			unsigned out_idx = 0, mod_idx = 0;
-			for (unsigned d = 0; d < counting_shape.dim(); d++)
+			for (unsigned d = 0; d < shape.dim(); d++)
 			{
-				out_idx += (counting_shape[d] + start[d]) * out._stride[d];
-				mod_idx += counting_shape[d] * other._stride[d];
+				out_idx += (counting_shape[d] + start[d]) * out_stride[d];
+				mod_idx += counting_shape[d] * stride[d];
 			}
 
-			unsigned count = 0u;
-			while (count++ < vector_len)
+			for(unsigned count = 0u; count< vector_len; count++)
 			{
 				out_data[out_idx] = mod_data[mod_idx];
-				out_idx += out_stride, mod_idx += mod_stride;
+				out_idx += out_str, mod_idx += mod_str;
 			}
 
 			counting_shape[-1]++;
-
-			for (int d = dim() - 1; d > 0; d--)
-			{
+			for (int d = shape.dim() - 1; d > 0; d--)
 				if (counting_shape[d] >= reference[d])
 				{
 					counting_shape[d] -= reference[d];
 					counting_shape[d - 1]++;
 				}
-			}
+
 			// If you reach the end of the leading dimension you're done.
 			if (counting_shape[0] >= reference[0])
 				break;
@@ -918,6 +954,10 @@ Tensor Tensor::repeat(int dim, unsigned repetitions) const
 		"Make sure the dimension you are repeating is of size 1."
 	);
 
+	// If you're not repeating don't repeat
+	if (repetitions == 1) 
+		return *this;
+
 	// Modulo dimension.
 	dim = unsigned(dim + _view.dim() * (2 - dim / int(_view.dim()))) % _view.dim();
 
@@ -926,40 +966,33 @@ Tensor Tensor::repeat(int dim, unsigned repetitions) const
 	out_shape[dim] = repetitions;
 	Tensor out(out_shape, device(), has_grad());
 
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten_data = __data;
+	// Get relevant sizes.
+	unsigned outer_size = numel() / _stride[dim];
+	unsigned inner_size = _stride[dim];
+	// Get relevant strides.
+	const unsigned outer_stride = inner_size * repetitions;
+
 	// Now we actually repeat the tensor.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::repeat(out_data, ten_data, outer_size, inner_size, repetitions);
 	else
 	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten_data = __data;
-		// Get relevant strides.
-		const unsigned elem_stride = out._stride[dim];
-		const unsigned post_stride = elem_stride * repetitions;
-		// Get relevant sizes.
-		unsigned prev_size = 1u;
-		unsigned post_size = 1u;
-		for (int i = 0; i < dim; i++)
-			post_size *= _view[i];
-		for (unsigned i = dim + 1; i < _view.dim(); i++)
-			prev_size *= _view[i];
-		// Iterate through all vectors to compute mean.
-		for (unsigned post_count = 0; post_count < post_size; post_count++)
-			for (unsigned prev_count = 0; prev_count < prev_size; prev_count++)
-			{
-				unsigned ten_idx = post_count * elem_stride + prev_count;
-				unsigned out_idx = post_count * post_stride + prev_count;
+		// Iterate through all elements to repeat them.
+		for (unsigned outer = 0; outer < outer_size; outer++)
+		for (unsigned inner = 0; inner < inner_size; inner++)
+		{
+			unsigned ten_idx = outer * inner_size + inner;
+			unsigned out_idx = outer * outer_stride + inner;
 
-				unsigned count = 0;
-				while (count++ < repetitions)
-				{
-					out_data[out_idx] = ten_data[ten_idx];
-					out_idx += elem_stride;
-				}
+			for (unsigned count = 0; count < repetitions; count++)
+			{
+				out_data[out_idx] = ten_data[ten_idx];
+				out_idx += inner_size;
 			}
+		}
 	}
 
 	// If it was a gradient operation store a RepOp instance.
@@ -1552,6 +1585,85 @@ Tensor Tensor::pow(float exp) const
 	return out;
 }
 
+Tensor Tensor::sum(int dim, bool keepdim) const
+{
+	// Sum tensor operator for backpropagation.
+	class SumOp : public Tensor::TensorInternals::TensorOp
+	{
+		// Tensor copy storage for the input.
+		Tensor in;
+
+	public:
+		// Constructor, stores all the data of the operation.
+		SumOp(const Tensor& _in, const Tensor& _out) : TensorOp{ "Sum", _out },
+			in{ _in }
+		{
+			_relatives[0] = &in;
+		}
+
+		// Backpropagation. Broadcasts to entire input.
+		void _backward() override
+		{
+			in.internal_gradient() += out.gradient();
+		}
+	};
+
+	// Tensor must be initialized.
+	TENSOR_CHECK(is_init(),
+		"Trying to apply sum to an empty tensor."
+	);
+
+	// Modulo dimension.
+	dim = unsigned(dim + _view.dim() * (2 - dim / int(_view.dim()))) % _view.dim();
+
+	// Get the initial dimension size.
+	unsigned _size = size(dim);
+	// Compute output shape.
+	Shape out_shape = shape();
+	out_shape[dim] = 1;
+
+	// Create output with the same shape as tensor.
+	Tensor out(out_shape, device(), has_grad());
+
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten_data = __data;
+	// Get relevant strides.
+	const unsigned elem_stride = _stride[dim];
+	const unsigned prev_stride = elem_stride * _size;
+	// Get outer size.
+	unsigned prev_size = out.numel() / elem_stride;
+
+	// Now we actually sum the tensor.
+	if (out.is_gpu())
+		kernel_ops::sum(out_data, ten_data, elem_stride, _size, out.numel());
+	else
+	{
+		// Iterate through all vectors to compute sum.
+		for (unsigned prev_count = 0; prev_count < prev_size; prev_count++)
+		for (unsigned post_count = 0; post_count < elem_stride; post_count++)
+		{
+			unsigned ten_idx = prev_count * prev_stride + post_count;
+			unsigned out_idx = prev_count * elem_stride + post_count;
+
+			for (unsigned count = 0u; count < _size; count++)
+			{
+				out_data[out_idx] += ten_data[ten_idx];
+				ten_idx += elem_stride;
+			}
+		}
+	}
+
+	// If it was a gradient operation store a SumOp instance.
+	if (has_grad())
+		out._internals->op = new SumOp(*this, out);
+
+	// Return out. Squeeze if necessary.
+	if (!keepdim && out.dim() > 1)
+		return out.squeeze(dim);
+	return out;
+}
+
 Tensor Tensor::mean(int dim, bool keepdim) const
 {
 	// Mean tensor operator for backpropagation.
@@ -1595,41 +1707,34 @@ Tensor Tensor::mean(int dim, bool keepdim) const
 	// Create output with the same shape as tensor.
 	Tensor out(out_shape, device(), has_grad());
 
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten_data = __data;
+	// Get relevant strides.
+	const unsigned elem_stride = _stride[dim];
+	const unsigned prev_stride = elem_stride * _size;
+	// Get outer size.
+	unsigned prev_size = out.numel() / elem_stride;
+
 	// Now we actually average the tensor.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::mean(out_data, ten_data, elem_stride, _size, out.numel());
 	else
 	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten_data = __data;
-		// Get relevant strides.
-		const unsigned elem_stride = _stride[dim];
-		const unsigned post_stride = elem_stride * _size;
-		// Get relevant sizes.
-		unsigned prev_size = 1u;
-		unsigned post_size = 1u;
-		for (int i = 0; i < dim; i++)
-			post_size *= _view[i];
-		for (unsigned i = dim + 1; i < _view.dim(); i++)
-			prev_size *= _view[i];
 		// Iterate through all vectors to compute mean.
-		for (unsigned post_count = 0; post_count < post_size; post_count++)
-			for (unsigned prev_count = 0; prev_count < prev_size; prev_count++)
-			{
-				unsigned ten_idx = post_count * post_stride + prev_count;
-				unsigned out_idx = post_count * elem_stride + prev_count;
+		for (unsigned prev_count = 0; prev_count < prev_size; prev_count++)
+		for (unsigned post_count = 0; post_count < elem_stride; post_count++)
+		{
+			unsigned ten_idx = prev_count * prev_stride + post_count;
+			unsigned out_idx = prev_count * elem_stride + post_count;
 				
-				unsigned count = 0;
-				while (count++ < _size)
-				{
-					out_data[out_idx] += ten_data[ten_idx];
-					ten_idx += elem_stride;
-				}
-				out_data[out_idx] /= _size;
+			for (unsigned count = 0u; count < _size; count++)
+			{
+				out_data[out_idx] += ten_data[ten_idx];
+				ten_idx += elem_stride;
 			}
+			out_data[out_idx] /= _size;
+		}
 	}
 
 	// If it was a gradient operation store a MeanOp instance.
@@ -1686,48 +1791,38 @@ Tensor Tensor::var(int dim, bool keepdim) const
 	// Create output with the same shape as tensor.
 	Tensor out(out_shape, device(), has_grad());
 
-	// Now we actually get the tensor variance.
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten_data = __data;
+	// Get relevant strides.
+	const unsigned elem_stride = _stride[dim];
+	const unsigned prev_stride = elem_stride * _size;
+	// Get outer size.
+	unsigned prev_size = out.numel() / elem_stride;
+
+	// Now we actually compute the tensor variance.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::var(out_data, ten_data, elem_stride, _size, out.numel());
 	else
 	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten_data = __data;
-		// Get relevant strides.
-		const unsigned elem_stride = _stride[dim];
-		const unsigned post_stride = elem_stride * _size;
-		// Get relevant sizes.
-		unsigned prev_size = 1u;
-		unsigned post_size = 1u;
-		for (int i = 0; i < dim; i++)
-			post_size *= _view[i];
-		for (unsigned i = dim + 1; i < _view.dim(); i++)
-			prev_size *= _view[i];
 		// Iterate through all vectors to compute variance.
-		for (unsigned post_count = 0; post_count < post_size; post_count++)
-			for (unsigned prev_count = 0; prev_count < prev_size; prev_count++)
+		for (unsigned prev_count = 0; prev_count < prev_size; prev_count++)
+		for (unsigned post_count = 0; post_count < elem_stride; post_count++)
+		{
+			unsigned ten_idx = prev_count * prev_stride + post_count;
+			unsigned out_idx = prev_count * elem_stride + post_count;
+
+			// Welford's algorithm for stability.
+			float mean = 0.f, M2 = 0.f, old_mean;
+			for (unsigned n = 1u; n < _size + 1u; n++)
 			{
-				unsigned ten_idx = post_count * post_stride + prev_count;
-				unsigned out_idx = post_count * elem_stride + prev_count;
-
-				// Welford's algorithm for stability.
-				float mean = 0.f, M2 = 0.f, old_mean;
-				unsigned n = 0u;
-
-				unsigned count = 0u;
-				while (count++ < _size)
-				{
-					n++;
-					old_mean = mean;
-					mean += (ten_data[ten_idx] - mean) / n;
-					M2 += (ten_data[ten_idx] - old_mean) * (ten_data[ten_idx] - mean);
-					ten_idx += elem_stride;
-				}
-				out_data[out_idx] = M2 / _size;
+				old_mean = mean;
+				mean += (ten_data[ten_idx] - mean) / n;
+				M2 += (ten_data[ten_idx] - old_mean) * (ten_data[ten_idx] - mean);
+				ten_idx += elem_stride;
 			}
+			out_data[out_idx] = M2 / _size;
+		}
 	}
 
 	// If it was a gradient operation store a VarOp instance.
@@ -1784,139 +1879,43 @@ Tensor Tensor::std(int dim, bool keepdim) const
 	// Create output with the same shape as tensor.
 	Tensor out(out_shape, device(), has_grad());
 
-	// Now we actually get the tensor deviation.
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten_data = __data;
+	// Get relevant strides.
+	const unsigned elem_stride = _stride[dim];
+	const unsigned prev_stride = elem_stride * _size;
+	// Get outer size.
+	unsigned prev_size = out.numel() / elem_stride;
+
+	// Now we actually compute the tensor STD.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::std(out_data, ten_data, elem_stride, _size, out.numel());
 	else
 	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten_data = __data;
-		// Get relevant strides.
-		const unsigned elem_stride = _stride[dim];
-		const unsigned post_stride = elem_stride * _size;
-		// Get relevant sizes.
-		unsigned prev_size = 1u;
-		unsigned post_size = 1u;
-		for (int i = 0; i < dim; i++)
-			post_size *= _view[i];
-		for (unsigned i = dim + 1; i < _view.dim(); i++)
-			prev_size *= _view[i];
-		// Iterate through all vectors to compute std.
-		for (unsigned post_count = 0; post_count < post_size; post_count++)
-			for (unsigned prev_count = 0; prev_count < prev_size; prev_count++)
+		// Iterate through all vectors to compute STD.
+		for (unsigned prev_count = 0; prev_count < prev_size; prev_count++)
+		for (unsigned post_count = 0; post_count < elem_stride; post_count++)
+		{
+			unsigned ten_idx = prev_count * prev_stride + post_count;
+			unsigned out_idx = prev_count * elem_stride + post_count;
+
+			// Welford's algorithm for stability.
+			float mean = 0.f, M2 = 0.f, old_mean;
+			for(unsigned n = 1u; n < _size + 1u; n++)
 			{
-				unsigned ten_idx = post_count * post_stride + prev_count;
-				unsigned out_idx = post_count * elem_stride + prev_count;
-
-				// Welford's algorithm for stability.
-				float mean = 0.f, M2 = 0.f, old_mean;
-				unsigned n = 0u;
-
-				unsigned count = 0u;
-				while (count++ < _size)
-				{
-					n++;
-					old_mean = mean;
-					mean += (ten_data[ten_idx] - mean) / n;
-					M2 += (ten_data[ten_idx] - old_mean) * (ten_data[ten_idx] - mean);
-					ten_idx += elem_stride;
-				}
-				out_data[out_idx] = sqrtf(M2 / _size);
+				old_mean = mean;
+				mean += (ten_data[ten_idx] - mean) / n;
+				M2 += (ten_data[ten_idx] - old_mean) * (ten_data[ten_idx] - mean);
+				ten_idx += elem_stride;
 			}
+			out_data[out_idx] = sqrtf(M2 / _size);
+		}
 	}
 
 	// If it was a gradient operation store a StdOp instance.
 	if (has_grad())
 		out._internals->op = new StdOp(*this, out, _size, dim);
-
-	// Return out. Squeeze if necessary.
-	if (!keepdim && out.dim() > 1)
-		return out.squeeze(dim);
-	return out;
-}
-
-Tensor Tensor::sum(int dim, bool keepdim) const
-{
-	// Sum tensor operator for backpropagation.
-	class SumOp : public Tensor::TensorInternals::TensorOp
-	{
-		// Tensor copy storage for the input.
-		Tensor in;
-
-	public:
-		// Constructor, stores all the data of the operation.
-		SumOp(const Tensor& _in, const Tensor& _out) : TensorOp{ "Sum", _out },
-			in{ _in }
-		{
-			_relatives[0] = &in;
-		}
-
-		// Backpropagation. Broadcasts to entire input.
-		void _backward() override
-		{
-			in.internal_gradient() += out.gradient();
-		}
-	};
-
-	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
-		"Trying to apply sum to an empty tensor."
-	);
-
-	// Modulo dimension.
-	dim = unsigned(dim + _view.dim() * (2 - dim / int(_view.dim()))) % _view.dim();
-
-	// Get the initial dimension size.
-	unsigned _size = size(dim);
-	// Compute output shape.
-	Shape out_shape = shape();
-	out_shape[dim] = 1;
-
-	// Create output with the same shape as tensor.
-	Tensor out(out_shape, device(), has_grad());
-
-	// Now we actually sum the tensor.
-	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
-	else
-	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten_data = __data;
-		// Get relevant strides.
-		const unsigned elem_stride = _stride[dim];
-		const unsigned post_stride = elem_stride * _size;
-		// Get relevant sizes.
-		unsigned prev_size = 1u;
-		unsigned post_size = 1u;
-		for (int i = 0; i < dim; i++)
-			post_size *= _view[i];
-		for (unsigned i = dim + 1; i < _view.dim(); i++)
-			prev_size *= _view[i];
-		// Iterate through all vectors to compute sum.
-		for (unsigned post_count = 0; post_count < post_size; post_count++)
-			for (unsigned prev_count = 0; prev_count < prev_size; prev_count++)
-			{
-				unsigned ten_idx = post_count * post_stride + prev_count;
-				unsigned out_idx = post_count * elem_stride + prev_count;
-
-				unsigned count = 0;
-				while (count++ < _size)
-				{
-					out_data[out_idx] += ten_data[ten_idx];
-					ten_idx += elem_stride;
-				}
-			}
-	}
-
-	// If it was a gradient operation store a SumOp instance.
-	if (has_grad())
-		out._internals->op = new SumOp(*this, out);
 
 	// Return out. Squeeze if necessary.
 	if (!keepdim && out.dim() > 1)
@@ -1964,53 +1963,45 @@ Tensor Tensor::softmax(int dim) const
 	unsigned _size = size(dim);
 	// Create output with the same shape as tensor.
 	Tensor out(shape(), device(), has_grad());
-	// Compute output shape.
-	Shape out_shape = shape();
+
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten_data = __data;
+	// Get relevant strides.
+	const unsigned elem_stride = _stride[dim];
+	const unsigned prev_stride = elem_stride * _size;
+	// Get outer size.
+	unsigned prev_size = out.numel() / prev_stride;
 
 	// Now we actually apply softmax to the tensor.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::softmax(out_data, ten_data, elem_stride, _size, out.numel() / _size);
 	else
 	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten_data = __data;
-		// Get relevant strides.
-		const unsigned elem_stride = _stride[dim];
-		const unsigned post_stride = elem_stride * _size;
-		// Get relevant sizes.
-		unsigned prev_size = 1u;
-		unsigned post_size = 1u;
-		for (int i = 0; i < dim; i++)
-			post_size *= _view[i];
-		for (unsigned i = dim + 1; i < _view.dim(); i++)
-			prev_size *= _view[i];
 		// Iterate through all vectors to compute softmax.
-		for (unsigned post_count = 0; post_count < post_size; post_count++)
-			for (unsigned prev_count = 0; prev_count < prev_size; prev_count++)
-			{
-				// Compute initial and final idx for this vector.
-				const unsigned idx_0 = post_count * post_stride + prev_count;
-				const unsigned idx_f = (post_count + 1) * post_stride + prev_count;
+		for (unsigned prev_count = 0; prev_count < prev_size; prev_count++)
+		for (unsigned post_count = 0; post_count < elem_stride; post_count++)
+		{
+			// Compute initial and final idx for this vector.
+			const unsigned idx_0 = prev_count * prev_stride + post_count;
+			const unsigned idx_f = (prev_count + 1) * prev_stride + post_count;
 				
-				// First pass find maximum.
-				float max = ten_data[idx_0];
-				for (unsigned idx = idx_0; idx < idx_f; idx += elem_stride)
-					if (ten_data[idx] > max)
-						max = ten_data[idx];
-				// Second pass compute exponential and accumulate sum.
-				float sum = 0.f;
-				for (unsigned idx = idx_0; idx < idx_f; idx += elem_stride)
-				{
-					out_data[idx] = expf(ten_data[idx] - max);
-					sum += out_data[idx];
-				}
-				// Third pass divide by sum.
-				for (unsigned idx = idx_0; idx < idx_f; idx+=elem_stride)
-					out_data[idx] /= sum;
+			// First pass find maximum.
+			float max = ten_data[idx_0];
+			for (unsigned idx = idx_0; idx < idx_f; idx += elem_stride)
+				if (ten_data[idx] > max)
+					max = ten_data[idx];
+			// Second pass compute exponential and accumulate sum.
+			float sum = 0.f;
+			for (unsigned idx = idx_0; idx < idx_f; idx += elem_stride)
+			{
+				out_data[idx] = expf(ten_data[idx] - max);
+				sum += out_data[idx];
 			}
+			// Third pass divide by sum.
+			for (unsigned idx = idx_0; idx < idx_f; idx+=elem_stride)
+				out_data[idx] /= sum;
+		}
 	}
 
 	// If it was a gradient operation store a SoftOp instance.
@@ -3526,17 +3517,16 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1)
 	unsigned N = out_shape[-1];
 	unsigned K = A._view[-1];
 
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* A_data = __dataof(A);
+	float* B_data = __dataof(B);
+
 	// Now we actually multiply the matrices.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::matmul(out_data, A_data, B_data, A._view, B._view);
 	else
 	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* A_data = __dataof(A);
-		float* B_data = __dataof(B);
 		// Create a running shape to count.
 		Shape counting_shape(out_shape.dim() > 2 ? out_shape.dim() - 2 : 1, (int*)nullptr);
 		// Create reference shape.
@@ -3555,9 +3545,9 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1)
 			unsigned out_idx = 0, A_idx = 0, B_idx = 0;
 			for (unsigned d = 0; d < counting_shape.dim(); d++)
 			{
-				out_idx += counting_shape[d] * out._stride[d];
-				A_idx += counting_shape[d] * A._stride[d];
-				B_idx += counting_shape[d] * B._stride[d];
+				if (out._view[d] != 1) out_idx += counting_shape[d] * out._stride[d];
+				if (A._view[d]   != 1) A_idx   += counting_shape[d] *   A._stride[d];
+				if (B._view[d]   != 1) B_idx   += counting_shape[d] *   B._stride[d];
 			}
 			// Get matrix pointers.
 			float* out_matrix = out_data + out_idx; // M x N values
@@ -3726,21 +3716,20 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& 
 	unsigned N = out_shape[-1];
 	unsigned K = A._view[-1];
 
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* A_data = __dataof(A);
+	float* B_data = __dataof(B);
+	float* b_data = __dataof(b);
+
 	// Now we actually multiply the matrices.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::matmul_bias(out_data, A_data, B_data, b_data, A._view, B._view, b._view);
 	else
 	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* A_data = __dataof(A);
-		float* B_data = __dataof(B);
-		float* b_data = __dataof(b);
 		// Get bias last dimensions strides.
-		unsigned bm_stride = b._stride[-2];
-		unsigned bn_stride = b._stride[-1];
+		unsigned bm_stride = (b._view[-2] == 1) ? 0u : b._stride[-2];
+		unsigned bn_stride = (b._view[-1] == 1) ? 0u : b._stride[-1];
 		// Create a running shape to count.
 		Shape counting_shape(out_shape.dim() > 2 ? out_shape.dim() - 2 : 1, (int*)nullptr);
 		// Create reference shape.
@@ -3759,10 +3748,10 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& 
 			unsigned out_idx = 0, A_idx = 0, B_idx = 0, b_idx = 0;
 			for (unsigned d = 0; d < counting_shape.dim(); d++)
 			{
-				out_idx += counting_shape[d] * out._stride[d];
-				A_idx += counting_shape[d] * A._stride[d];
-				B_idx += counting_shape[d] * B._stride[d];
-				b_idx += counting_shape[d] * b._stride[d];
+				if (out._view[d] != 1) out_idx += counting_shape[d] * out._stride[d];
+				if (A._view[d]   != 1) A_idx   += counting_shape[d] *   A._stride[d];
+				if (B._view[d]   != 1) B_idx   += counting_shape[d] *   B._stride[d];
+				if (b._view[d]   != 1) b_idx   += counting_shape[d] *   b._stride[d];
 			}
 			// Get matrix pointers.
 			float* out_matrix = out_data + out_idx; // M x N values
@@ -3912,60 +3901,42 @@ Tensor Functional::cat(const Tensor& ten0, const Tensor& ten1, int dim)
 	// Create output with the concatenated shape.
 	Tensor out(out_shape, ten0.device(), requires_grad);
 
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten0_data = __dataof(ten0);
+	float* ten1_data = __dataof(ten1);
+	// Get outer stride.
+	const unsigned outer_stride_out = out._stride[dim] * out_shape[dim];
+	const unsigned outer_stride_in0 = out._stride[dim] * _size0;
+	const unsigned outer_stride_in1 = out._stride[dim] * _size1;
+	// Get relevant sizes.
+	unsigned outer_size = out.numel() / outer_stride_out;
+	unsigned inner_size = out._stride[dim];
+
 	// Now we actually concatenate the tensors.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::cat(out_data, ten0_data, ten1_data, inner_size, outer_size, _size0, _size1);
 	else
 	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten0_data = __dataof(ten0);
-		float* ten1_data = __dataof(ten1);
-		// Get relevant sizes.
-		unsigned prev_size = 1u;
-		unsigned post_size = 1u;
-		for (int i = 0; i < dim; i++)
-			post_size *= out._view[i];
-		for (unsigned i = dim + 1; i < out._view.dim(); i++)
-			prev_size *= out._view[i];
-		// Get relevant strides.
-		const unsigned elem_stride = out._stride[dim];
-		const unsigned post_stride_out = elem_stride * out_shape[dim];
-
-		// Start with tensor 0.
+		// Iterate through entire dimension size to write to output.
+		for (unsigned outer = 0; outer < outer_size; outer++)
+		for (unsigned inner = 0; inner < inner_size; inner++)
 		{
-			// Get tensor strides.
-			const unsigned post_stride_ten = elem_stride * _size0;
-			// Iterate thruough entire dimension size to write to output.
+			unsigned in0_idx = outer * outer_stride_in0 + inner;
+			unsigned in1_idx = outer * outer_stride_in1 + inner;
+			unsigned out_idx = outer * outer_stride_out + inner;
+
+			// Copy first tensor data.
 			for (unsigned i = 0; i < _size0; i++)
 			{
-				for (unsigned post_count = 0; post_count < post_size; post_count++)
-				{
-					unsigned ten_idx = i * elem_stride + post_count * post_stride_ten;
-					unsigned out_idx = i * elem_stride + post_count * post_stride_out;
-
-					for (unsigned prev_count = 0; prev_count < prev_size; prev_count++)
-						out_data[out_idx++] = ten0_data[ten_idx++];
-				}
+				out_data[out_idx] = ten0_data[in0_idx];
+				out_idx += inner_size, in0_idx += inner_size;
 			}
-		}
-		// Follow with tensor 1.
-		{
-			// Get tensor strides.
-			const unsigned post_stride_ten = elem_stride * _size1;
-			// Iterate thruough entire dimension size to write to output.
+			// Copy second tensor data.
 			for (unsigned i = 0; i < _size1; i++)
 			{
-				for (unsigned post_count = 0; post_count < post_size; post_count++)
-				{
-					unsigned ten_idx = i * elem_stride + post_count * post_stride_ten;
-					unsigned out_idx = (i + _size0) * elem_stride + post_count * post_stride_out;
-
-					for (unsigned prev_count = 0; prev_count < prev_size; prev_count++)
-						out_data[out_idx++] = ten1_data[ten_idx++];
-				}
+				out_data[out_idx] = ten1_data[in1_idx];
+				out_idx += inner_size, in1_idx += inner_size;
 			}
 		}
 	}
@@ -4043,26 +4014,24 @@ Tensor Functional::mean_squared_error(const Tensor& ten0, const Tensor& ten1)
 	// Create output with single element.
 	Tensor out(Shape(1), ten0.device(), requires_grad);
 
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* y0_data = __dataof(y0);
+	float* y1_data = __dataof(y1);
+
 	// Now we actually compute the MSE.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::mse(out_data, y0_data, y1_data, size);
 	else
 	{
-		// Extract the data.
-		float& out_data = *__dataof(out);
-		float* y0_data = __dataof(y0);
-		float* y1_data = __dataof(y1);
 		// Iterate through entire length.
-		int idx = -1;
-		while (++idx < size)
+		for (int idx = 0; idx < size; idx++)
 		{
 			float d = y0_data[idx] - y1_data[idx];
-			out_data += d * d;
+			*out_data += d * d;
 		}
 		// Divide at the end.
-		out_data /= size;
+		*out_data /= size;
 	}
 
 	// If it was a gradient operation store a CatOp instance.
@@ -4326,16 +4295,14 @@ Tensor Functional::causal_mask(unsigned L, const char* device)
 	// Create mask tensor.
 	Tensor mask(Shape(L, L), device, false);
 
+	// Extract the data.
+	float* out_data = mask.internal_data();
+
 	// Set values to -inf.
 	if (mask.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::causal_mast(out_data, L);
 	else
 	{
-		// Extract the data.
-		float* out_data = mask.internal_data();
-
 		// Our negative infinity.
 		constexpr float neg_inf = -std::numeric_limits<float>::infinity();
 

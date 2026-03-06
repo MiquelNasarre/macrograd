@@ -79,4 +79,27 @@ namespace kernel_ops
 	void set_seed(size_t seed);
 	void normal(void* data_ptr, float mean, float std, size_t num_elements);
 	void uniform(void* data_ptr, float min, float max, size_t num_elements);
+
+	// --- Row-Wise Operators ---
+
+	void sum(void* out_data, const void* in_data, int element_stride, int element_count, int rows);
+	void mean(void* out_data, const void* in_data, int element_stride, int element_count, int rows);
+	void var(void* out_data, const void* in_data, int element_stride, int element_count, int rows);
+	void std(void* out_data, const void* in_data, int element_stride, int element_count, int rows);
+	void softmax(void* out_data, const void* in_data, int element_stride, int element_count, int rows);
+
+	// --- Shape modifiers ---
+
+	void transpose(void* out_data, const void* in_data, int A, int B, int outter_size, int middle_size, int inner_size, int in_stride, int out_stride);
+	void subset(const Shape& out_shape, const Shape& in_shape, const Shape& idxs, void* out_data, const void* in_data);
+	void modify(const Shape& out_shape, const Shape& in_shape, const Shape& out_strides, const Shape& idxs, void* out_data, const void* in_data);
+	void repeat(void* out_data, const void* in_data, int outer_size, int inner_size, int repetitions);
+
+	// --- Functional Namespace ---
+
+	void matmul(void* out_data, const void* A_data, const void* B_data, const Shape& A_shape, const Shape& B_shape);
+	void matmul_bias(void* out_data, const void* A_data, const void* B_data, const void* bias, const Shape& A_shape, const Shape& B_shape, const Shape& bias_shape);
+	void cat(void* out_data, const void* in0_data, const void* in1_data, size_t inner_size, size_t outer_size, int size0, int size1);
+	void mse(void* out_data, const void* x_data, const void* y_data, size_t num_elements);
+	void causal_mast(void* out_data, int L);
 }

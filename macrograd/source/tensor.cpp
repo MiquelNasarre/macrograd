@@ -57,6 +57,18 @@ Shape& Shape::operator=(const Shape& other)
 	return *this;
 }
 
+bool Shape::operator==(const Shape& other) const
+{
+	if (_dim != other._dim) 
+		return false;
+
+	for (unsigned i = 0; i < _dim; i++)
+		if (_sizes[i] != other._sizes[i])
+			return false;
+
+	return true;
+}
+
 void Shape::remove(int dim)
 {
 	if (!_dim)
@@ -194,10 +206,6 @@ Tensor::Tensor(const Shape& shape, const char* device, bool requires_grad)
 	if (_internals->_data_size % 64 != 0)
 		_internals->_data_size += 64 - _internals->_data_size % 64;
 
-	// Set strides to 0 for unitary dimensions.
-	for (unsigned i = 0; i < shape.dim(); i++)
-		if (_view[i] == 1) _stride[i] = 0;
-
 	snprintf(_internals->device, sizeof(_internals->device), "%s", device);
 
 	if (!strcmp(device, "cpu"))
@@ -267,12 +275,14 @@ const char* Tensor::str() const
 
 	snprintf(buffer[next % 8], 4096,
 		"Shape:    %s\n"
+		"Device:   %s\n"
 		"Operator: %s\n"
 		"Grad:     %s%s\n" 
 		"Data:     \n%s",
 
 		
 		shape().str(), 
+		device(),
 		get_operator(),
 		has_grad() ? "\n" : "",
 		has_grad() ? gradient().array_str() : "None",
