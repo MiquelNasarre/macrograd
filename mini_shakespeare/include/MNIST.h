@@ -126,12 +126,14 @@ private:
 public:
 	Linear(unsigned in_dim, unsigned out_dim, bool has_bias = true, const char* device = "cpu") : _has_bias{ has_bias }
 	{
-		matrix = Initialization::uniform(Tensor(Shape{ in_dim, out_dim }, device), -sqrtf(6.f / in_dim), sqrtf(6.f / in_dim));
+		matrix = Tensor(Shape{ in_dim, out_dim }, device);
+		Initialization::uniform(matrix, -sqrtf(6.f / in_dim), sqrtf(6.f / in_dim));
 		add_parameter(&matrix);
 
 		if (has_bias)
 		{
-			bias = Initialization::uniform(Tensor(Shape{ out_dim, }, device), -sqrtf(1.f / in_dim), sqrtf(1.f / in_dim));
+			bias = Tensor(Shape{ out_dim, }, device);
+			Initialization::uniform(bias, -sqrtf(1.f / in_dim), sqrtf(1.f / in_dim));
 			add_parameter(&bias);
 		}
 	}
@@ -187,8 +189,8 @@ public:
 
 static void run_mlp_training_run()
 {
-	unsigned train_size = 50000;
-	unsigned test_size  = 10000;
+	constexpr int train_size = 50000;
+	constexpr int test_size  = 10000;
 
 	float** training_images   = NumberRecognition::getImages(TRAINING, 0, train_size);
 	unsigned* training_labels = NumberRecognition::getLabels(TRAINING, 0, train_size);
@@ -200,15 +202,20 @@ static void run_mlp_training_run()
 	VectorInt train_labels(train_size); 
 	VectorInt test_labels(test_size);
 
-	for (unsigned i = 0; i < train_size; i++) train_data.internal_set_vector({ i }, training_images[i]);
-	for (unsigned i = 0; i <  test_size; i++)  test_data.internal_set_vector({ i },  testing_images[i]);
-	for (unsigned i = 0; i < train_size; i++) train_labels[i] = training_labels[i];
-	for (unsigned i = 0; i <  test_size; i++)  test_labels[i] =  testing_labels[i];
+	for (int i = 0; i < train_size; i++) train_data.internal_set_vector({ i }, training_images[i]);
+	for (int i = 0; i <  test_size; i++)  test_data.internal_set_vector({ i },  testing_images[i]);
+	for (int i = 0; i < train_size; i++) train_labels[i] = training_labels[i];
+	for (int i = 0; i <  test_size; i++)  test_labels[i] =  testing_labels[i];
+
+	train_data -= train_data.mean(-1, true);
+	train_data /= train_data.std(-1, true);
+	test_data -= test_data.mean(-1, true);
+	test_data /= test_data.std(-1, true);
 
 	printf("MNIST loaded successfully!\n\n");
 
-	unsigned epochs     = 100;
-	unsigned batch_size = 256;
+	int epochs			= 1000;
+	int batch_size		= 256;
 	float initial_lr    = 0.020f;
 	float final_lr      = 0.002f;
 	float momentum      = 0.900f;
@@ -220,7 +227,7 @@ static void run_mlp_training_run()
 
 	VectorInt randperm(0, train_size);
 
-	for (unsigned epoch = 1; epoch < epochs + 1; epoch++)
+	for (int epoch = 1; epoch < epochs + 1; epoch++)
 	{
 		// Training set.
 		mlp.with_grad();
@@ -238,7 +245,7 @@ static void run_mlp_training_run()
 
 				// Get input tensor.
 				Tensor in = perm_train_data[{start, end}];
-				VectorInt labels = train_labels[{start, end}];
+				VectorInt labels = perm_train_labels[{start, end}];
 
 				// Forward pass.
 				Tensor out = mlp(in);
@@ -255,7 +262,7 @@ static void run_mlp_training_run()
 		mlp.no_grad();
 		{
 			float accum_loss = 0.f;
-			unsigned correct_count = 0u;
+			int correct_count = 0u;
 			int start = 0u, end = 0u;
 			while (end < test_size)
 			{
@@ -279,7 +286,7 @@ static void run_mlp_training_run()
 					unsigned argmax = 0;
 					for (unsigned i = 1; i < out.size(-1); i++)
 						if (logits[i] > logits[argmax]) argmax = i;
-
+					// If it is a match increase correct count.
 					if (argmax == labels[v]) correct_count++;
 				}
 			}

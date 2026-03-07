@@ -247,7 +247,45 @@ VectorInt& VectorInt::operator=(const VectorInt& other)
 
 VectorInt VectorInt::operator[](const VectorInt& idxs) const
 {
-	return VectorInt();
+	TENSOR_CHECK(idxs.len(),
+		"Trying to use VectorInt::operator[] with empty indices is not allowed."
+	);
+	TENSOR_CHECK(len(),
+		"Trying to use operator[] on an empty VectorInt is not allowed."
+	);
+	TENSOR_CHECK(idxs.is_gpu() == is_gpu(),
+		"Trying to call operator[] with indices and VectorInt in different devices."
+	);
+
+	// Create output vector.
+	VectorInt out(idxs.len(), device());
+
+	// Get necessary data.
+	int* out_data = out.data();
+	unsigned length = idxs.len();
+	unsigned size0 = len();
+	const int* idxs_data = idxs.data();
+	const int* vec_data = data();
+
+	// Now we indexate the output vector.
+	if (out.is_gpu())
+		kernel_ops::vector_bracket_op(out_data, vec_data, idxs_data, length, size0);
+	else
+	{
+		// Iterate through the entire length.
+		for (unsigned i = 0; i < length; i++)
+		{
+			int idx = idxs_data[i];
+			TENSOR_CHECK(idx >= 0 && (unsigned)idx < size0,
+				"Idx out of bounds find during an operator [] call.\n"
+				"Make sure your indices are in the range [0, len() - 1]. Idx found: %i", idx
+			);
+			out_data[i] = vec_data[idx];
+		}
+	}
+
+	// Return output vector.
+	return out;
 }
 
 int& VectorInt::operator[](int i)
@@ -300,6 +338,29 @@ void VectorInt::set(int i, int val)
 
 	if (_internals->_is_gpu) cuda::copy_cpu_to_gpu((int*)_internals->_data + _offset + idx, &val, sizeof(int));
 	else ((int*)_internals->_data + _offset)[idx] = val;
+}
+
+void VectorInt::set(int a, int b, int* values)
+{
+	TENSOR_CHECK(_internals,
+		"Set function on an empty VectorInt is not allowed"
+	);
+
+	int idx_a = mod(a, (int)_length);
+	int idx_b = mod(b - 1, (int)_length) + 1;
+
+	TENSOR_CHECK(idx_b >= idx_a,
+		"Trying to set a list of values on a VectorInt while the indices provided are reversed.\n"
+		"Modulo index 'a': %i | Modulo index 'b': %i", idx_a, idx_b
+	);
+
+	if (idx_a == idx_b)
+		return;
+
+	if (is_gpu()) 
+		cuda::copy_cpu_to_gpu((int*)_internals->_data + _offset + idx_a, values, (idx_b - idx_a) * sizeof(int));
+	else 
+		memcpy((int*)_internals->_data + _offset + idx_a, values, (idx_b - idx_a) * sizeof(int));
 }
 
 VectorInt VectorInt::to(const char* device) const

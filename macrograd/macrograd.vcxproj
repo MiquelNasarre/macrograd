@@ -80,7 +80,7 @@
       <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <PreprocessorDefinitions>CCCL_IGNORE_DEPRECATED_CPP_DIALECT;WIN32;WIN64;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>CCCL_IGNORE_DEPRECATED_CPP_DIALECT;WIN32;WIN64;_CONSOLE;</PreprocessorDefinitions>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalIncludeDirectories>$(CudaToolkitIncludeDir);$(ProjectDir)include;</AdditionalIncludeDirectories>
     </ClCompile>

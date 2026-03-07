@@ -29,12 +29,17 @@
 inline float __expf(float x) { return expf(x); }
 inline float __logf(float x) { return logf(x); }
 inline void __syncthreads() {}
+inline void atomicAdd(float*, float) {}
 #endif
 
 // Checks CUDA expression, if 'cudaError != cudaSuccess' raises a TENSOR_ERROR. 
+#ifndef NDEBUG
 #define CUDA_CHECK(x)       do { cudaError_t err = (x); if(err != cudaSuccess) TENSOR_ERROR("(CUDA ERROR)\n%s\n", cudaGetErrorString(err)); } while(0)
 #define CUBLAS_CHECK(x)     do { cublasStatus_t _s = (x); if (_s != CUBLAS_STATUS_SUCCESS) TENSOR_ERROR("(CUBLAS ERROR)\nError Code: 0x%08X", _s); } while(0)
-
+#else
+#define CUDA_CHECK(x)       (x)
+#define CUBLAS_CHECK(x)     (x)
+#endif
 /*
 --------------------------------------------------------------------------------------------------------------------------
  Global Stream Class
@@ -739,6 +744,150 @@ void kernel_ops::divide_tensor(void* out_data, const void* num_data, const void*
         );
         CUDA_CHECK(cudaGetLastError());
     }
+}
+
+__global__ void tensor_bracket_op_single_kernel_vec(float4* out, const float4* ten, const int* indices_data, size_t num_indices, size_t vec_stride, size_t range)
+{
+    size_t id = blockIdx.x * blockDim.x + threadIdx.x;
+    if (id >= num_indices)
+        return;
+
+    int idx = indices_data[id];
+    assert(idx >= 0 && idx < range && "Idx out of range found during a Tensor::operator[] call.");
+
+    float4* base_out = out + id * vec_stride;
+    const float4* base_ten = ten + idx * vec_stride;
+
+    for (size_t i = 0; i < vec_stride; i++)
+        base_out[i] = base_ten[i];
+}
+__global__ void tensor_bracket_op_single_kernel(float* out, const float* ten, const int* indices_data, size_t num_indices, size_t stride, size_t range)
+{
+    size_t id = blockIdx.x * blockDim.x + threadIdx.x;
+    if (id >= num_indices)
+        return;
+
+    int idx = indices_data[id];
+    assert(idx >= 0 && idx < range && "Idx out of range found during a Tensor::operator[] call.");
+
+    float* base_out = out + id * stride;
+    const float* base_ten = ten + idx * stride;
+
+    for (size_t i = 0; i < stride; i++)
+        base_out[i] = base_ten[i];
+}
+__global__ void tensor_bracket_op_kernel_vec(float4* out, const float4* ten, const int* indices_data, size_t vec_stride, size_t range)
+{
+    size_t id = blockIdx.x;
+
+    int idx = indices_data[id];
+    assert(idx >= 0 && idx < range && "Idx out of range found during a Tensor::operator[] call.");
+
+    float4* base_out = out + id * vec_stride;
+    const float4* base_ten = ten + idx * vec_stride;
+
+    for (size_t i = threadIdx.x; i < vec_stride; i += blockDim.x)
+        base_out[i] = base_ten[i];
+}
+__global__ void tensor_bracket_op_kernel(float* out, const float* ten, const int* indices_data, size_t stride, size_t range)
+{
+    size_t id = blockIdx.x;
+
+    int idx = indices_data[id];
+    assert(idx >= 0 && idx < range && "Idx out of range found during a Tensor::operator[] call.");
+
+    float* base_out = out + id * stride;
+    const float* base_ten = ten + idx * stride;
+
+    for (size_t i = threadIdx.x; i < stride; i += blockDim.x)
+        base_out[i] = base_ten[i];
+}
+void kernel_ops::tensor_bracket_op(void* out_data, const void* ten_data, const void* indices_data, size_t num_indices, size_t stride, size_t range)
+{
+    const int BLOCK_SIZE = 256;
+
+    bool use_single = (stride <= 64) && (num_indices >= 4 * device::sm_count() * 256);
+    bool can_vec = (stride % 4 == 0);
+
+    if (use_single) 
+    {
+        const size_t grid_size = (num_indices + BLOCK_SIZE - 1) / BLOCK_SIZE;
+
+        if (can_vec)
+        {
+            CUDA_LAUNCH(tensor_bracket_op_single_kernel_vec, (unsigned)grid_size, BLOCK_SIZE,
+                (float4*)out_data,
+                (const float4*)ten_data,
+                (const int*)indices_data,
+                num_indices,
+                stride / 4,
+                range
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+        else 
+        {
+            CUDA_LAUNCH(tensor_bracket_op_single_kernel, (unsigned)grid_size, BLOCK_SIZE,
+                (float*)out_data,
+                (const float*)ten_data,
+                (const int*)indices_data,
+                num_indices,
+                stride,
+                range
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+    }
+    else 
+    {
+        if (can_vec)
+        {
+            CUDA_LAUNCH(tensor_bracket_op_kernel_vec, (unsigned)num_indices, BLOCK_SIZE,
+                (float4*)out_data,
+                (const float4*)ten_data,
+                (const int*)indices_data,
+                stride / 4,
+                range
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+        else
+        {
+            CUDA_LAUNCH(tensor_bracket_op_kernel, (unsigned)num_indices, BLOCK_SIZE,
+                (float*)out_data,
+                (const float*)ten_data,
+                (const int*)indices_data,
+                stride,
+                range
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+    }
+}
+
+__global__ void vector_bracket_op_kernel(int* __restrict__ out, const int* vec, const int* indices, size_t num_indices, size_t range)
+{
+    size_t total_threads = blockDim.x * gridDim.x;
+
+    for (size_t i = blockIdx.x * blockDim.x + threadIdx.x; i < num_indices; i += total_threads)
+    {
+        int idx = indices[i];
+        assert(idx >= 0 && idx < range && "Idx out of range found during a VectorInt::operator[] call.");
+        out[i] = vec[idx];
+    }
+}
+void kernel_ops::vector_bracket_op(void* out_data, const void* vec_data, const void* indices_data, size_t num_indices, size_t range)
+{
+    const int BLOCK_SIZE = 256;
+    const int grid_size = device::sm_count() * 4;
+
+    CUDA_LAUNCH(vector_bracket_op_kernel, grid_size, BLOCK_SIZE,
+        (int*)out_data,
+        (const int*)vec_data,
+        (const int*)indices_data,
+        num_indices, range
+    );
+    CUDA_CHECK(cudaGetLastError());
 }
 
 /*
@@ -1455,6 +1604,9 @@ void kernel_ops::arange(void* data_ptr, int a, int stride, size_t count)
 template<int BLOCK>
 __inline__ __device__ float block_max(float x)
 {
+    static_assert(BLOCK % 32 == 0, "BLOCK must be a multiple of 32");
+    static_assert(BLOCK <= 1024, "BLOCK must be less or equal to 1024");
+
     __shared__ float shared[32];
     int lane = threadIdx.x % 32;
     int warp = threadIdx.x / 32;
@@ -1479,6 +1631,9 @@ __inline__ __device__ float block_max(float x)
 template<int BLOCK>
 __inline__ __device__ float block_sum(float x) 
 {
+    static_assert(BLOCK % 32 == 0, "BLOCK must be a multiple of 32");
+    static_assert(BLOCK <= 1024, "BLOCK must be less or equal to 1024");
+
     __shared__ float shared[32]; // up to 32 warps
     int lane = threadIdx.x % 32;
     int warp = threadIdx.x / 32;
@@ -1590,10 +1745,9 @@ __inline__ __device__ Welford welford_merge(Welford w)
 }
 
 template<int BLOCK>
-__global__ void sum_lastdim_vec(float* __restrict__ out, const float* __restrict__ in, int element_count, int rows)
+__global__ void sum_lastdim_vec(float* __restrict__ out, const float* __restrict__ in, int element_count)
 {
     int row = blockIdx.x;
-    if (row >= rows) return;
 
     const float* base = in + row * element_count;
     float sum = 0.0f;
@@ -1622,10 +1776,9 @@ __global__ void sum_lastdim_vec(float* __restrict__ out, const float* __restrict
         out[row] = sum;
 }
 template<int BLOCK>
-__global__ void sum_dim_strided(float* __restrict__ out, const float* __restrict__ in, int element_stride, int element_count, int rows)
+__global__ void sum_dim_strided(float* __restrict__ out, const float* __restrict__ in, int element_stride, int element_count)
 {
     int row = blockIdx.x;
-    if (row >= rows) return;
 
     // Compute pointer position based on row number.
     int outer_stride = element_count * element_stride;
@@ -1656,7 +1809,7 @@ void kernel_ops::sum(void* out_data, const void* in_data, int element_stride, in
         CUDA_LAUNCH(sum_lastdim_vec<BLOCK>, rows, BLOCK,
             (float*)out_data,
             (const float*)in_data,
-            element_count, rows
+            element_count
         );
         CUDA_CHECK(cudaGetLastError());
     }
@@ -1667,17 +1820,16 @@ void kernel_ops::sum(void* out_data, const void* in_data, int element_stride, in
             (float*)out_data,
             (const float*)in_data,
             element_stride,
-            element_count, rows
+            element_count
         );
         CUDA_CHECK(cudaGetLastError());
     }
 }
 
 template<int BLOCK>
-__global__ void mean_lastdim_vec(float* __restrict__ out, const float* __restrict__ in, int element_count, int rows)
+__global__ void mean_lastdim_vec(float* __restrict__ out, const float* __restrict__ in, int element_count)
 {
     int row = blockIdx.x;
-    if (row >= rows) return;
 
     const float* base = in + row * element_count;
     float sum = 0.0f;
@@ -1706,10 +1858,9 @@ __global__ void mean_lastdim_vec(float* __restrict__ out, const float* __restric
         out[row] = sum / element_count;
 }
 template<int BLOCK>
-__global__ void mean_dim_strided(float* __restrict__ out, const float* __restrict__ in, int element_stride, int element_count, int rows)
+__global__ void mean_dim_strided(float* __restrict__ out, const float* __restrict__ in, int element_stride, int element_count)
 {
     int row = blockIdx.x;
-    if (row >= rows) return;
 
     // Compute pointer position based on row number.
     int outer_stride = element_count * element_stride;
@@ -1740,7 +1891,7 @@ void kernel_ops::mean(void* out_data, const void* in_data, int element_stride, i
         CUDA_LAUNCH(mean_lastdim_vec<BLOCK>, rows, BLOCK,
             (float*)out_data,
             (const float*)in_data,
-            element_count, rows
+            element_count
         );
         CUDA_CHECK(cudaGetLastError());
     }
@@ -1751,17 +1902,16 @@ void kernel_ops::mean(void* out_data, const void* in_data, int element_stride, i
             (float*)out_data,
             (const float*)in_data,
             element_stride,
-            element_count, rows
+            element_count
         );
         CUDA_CHECK(cudaGetLastError());
     }
 }
 
 template<int BLOCK>
-__global__ void var_lastdim_vec(float* __restrict__ out, const float* __restrict__ in, int element_count, int rows)
+__global__ void var_lastdim_vec(float* __restrict__ out, const float* __restrict__ in, int element_count)
 {
     int row = blockIdx.x;
-    if (row >= rows) return;
 
     const float* base = in + row * element_count;
     Welford w = empty_welford();
@@ -1787,10 +1937,9 @@ __global__ void var_lastdim_vec(float* __restrict__ out, const float* __restrict
         out[row] = w.M2 / element_count;
 }
 template<int BLOCK>
-__global__ void var_dim_strided(float* __restrict__ out, const float* __restrict__ in, int element_stride, int element_count, int rows)
+__global__ void var_dim_strided(float* __restrict__ out, const float* __restrict__ in, int element_stride, int element_count)
 {
     int row = blockIdx.x;
-    if (row >= rows) return;
 
     // Compute pointer position based on row number.
     int outer_stride = element_count * element_stride;
@@ -1821,7 +1970,7 @@ void kernel_ops::var(void* out_data, const void* in_data, int element_stride, in
         CUDA_LAUNCH(var_lastdim_vec<BLOCK>, rows, BLOCK,
             (float*)out_data,
             (const float*)in_data,
-            element_count, rows
+            element_count
         );
         CUDA_CHECK(cudaGetLastError());
     }
@@ -1832,17 +1981,16 @@ void kernel_ops::var(void* out_data, const void* in_data, int element_stride, in
             (float*)out_data,
             (const float*)in_data,
             element_stride,
-            element_count, rows
+            element_count
         );
         CUDA_CHECK(cudaGetLastError());
     }
 }
 
 template<int BLOCK>
-__global__ void std_lastdim_vec(float* __restrict__ out, const float* __restrict__ in, int element_count, int rows)
+__global__ void std_lastdim_vec(float* __restrict__ out, const float* __restrict__ in, int element_count)
 {
     int row = blockIdx.x;
-    if (row >= rows) return;
 
     const float* base = in + row * element_count;
     Welford w = empty_welford();
@@ -1868,10 +2016,9 @@ __global__ void std_lastdim_vec(float* __restrict__ out, const float* __restrict
         out[row] = sqrtf(w.M2 / element_count);
 }
 template<int BLOCK>
-__global__ void std_dim_strided(float* __restrict__ out, const float* __restrict__ in, int element_stride, int element_count, int rows)
+__global__ void std_dim_strided(float* __restrict__ out, const float* __restrict__ in, int element_stride, int element_count)
 {
     int row = blockIdx.x;
-    if (row >= rows) return;
 
     // Compute pointer position based on row number.
     int outer_stride = element_count * element_stride;
@@ -1902,7 +2049,7 @@ void kernel_ops::std(void* out_data, const void* in_data, int element_stride, in
         CUDA_LAUNCH(std_lastdim_vec<BLOCK>, rows, BLOCK,
             (float*)out_data,
             (const float*)in_data,
-            element_count, rows
+            element_count
         );
         CUDA_CHECK(cudaGetLastError());
     }
@@ -1913,17 +2060,16 @@ void kernel_ops::std(void* out_data, const void* in_data, int element_stride, in
             (float*)out_data,
             (const float*)in_data,
             element_stride,
-            element_count, rows
+            element_count
         );
         CUDA_CHECK(cudaGetLastError());
     }
 }
 
 template<int BLOCK>
-__global__ void softmax_lastdim(float* __restrict__ out, const float* __restrict__ in, int element_count, int rows)
+__global__ void softmax_lastdim(float* __restrict__ out, const float* __restrict__ in, int element_count)
 {
     int row = blockIdx.x;
-    if (row >= rows) return;
 
     const float* base_in = in + row * element_count;
     float* base_out = out + row * element_count;
@@ -1963,10 +2109,9 @@ __global__ void softmax_lastdim(float* __restrict__ out, const float* __restrict
         base_out[i] *= inv_s;
 }
 template<int BLOCK>
-__global__ void softmax_dim_strided(float* __restrict__ out, const float* __restrict__ in, int element_stride, int element_count, int rows)
+__global__ void softmax_dim_strided(float* __restrict__ out, const float* __restrict__ in, int element_stride, int element_count)
 {
     int row = blockIdx.x;
-    if (row >= rows) return;
 
     // Compute pointer position based on row number.
     int outer_stride = element_count * element_stride;
@@ -2023,7 +2168,7 @@ void kernel_ops::softmax(void* out_data, const void* in_data, int element_stride
         CUDA_LAUNCH(softmax_lastdim<BLOCK>, rows, BLOCK,
             (float*)out_data,
             (const float*)in_data,
-            element_count, rows
+            element_count
         );
         CUDA_CHECK(cudaGetLastError());
     }
@@ -2034,7 +2179,7 @@ void kernel_ops::softmax(void* out_data, const void* in_data, int element_stride
             (float*)out_data,
             (const float*)in_data,
             element_stride,
-            element_count, rows
+            element_count
         );
         CUDA_CHECK(cudaGetLastError());
     }
@@ -3162,7 +3307,8 @@ __global__ void mse_kernel_vec(float* __restrict__ out, const float4* x, const f
     }
 
     sum = block_sum<BLOCK>(sum);
-    if (threadIdx.x == 0) *out = sum / (num_vec * 4);
+    if (threadIdx.x == 0)
+        atomicAdd(out, sum / (num_vec * 4));
 }
 template<int BLOCK>
 __global__ void mse_kernel(float* __restrict__ out, const float* x, const float* y, size_t num_elements)
@@ -3175,16 +3321,18 @@ __global__ void mse_kernel(float* __restrict__ out, const float* x, const float*
         sum += (x[i] - y[i]) * (x[i] - y[i]);
 
     sum = block_sum<BLOCK>(sum);
-    if (threadIdx.x == 0) *out = sum / num_elements;
+    if (threadIdx.x == 0) 
+        atomicAdd(out, sum / num_elements);
 }
 void kernel_ops::mse(void* out_data, const void* x_data, const void* y_data, size_t num_elements)
 {
-    constexpr int BLOCK = 1024;
+    constexpr int BLOCK = 256;
+    const int grid_size = device::sm_count() * 4;
 
     // If possible use the fast kernel
     if (num_elements % 4 == 0)
     {
-        CUDA_LAUNCH(mse_kernel_vec<BLOCK>, 1, BLOCK,
+        CUDA_LAUNCH(mse_kernel_vec<BLOCK>, grid_size, BLOCK,
             (float*)out_data,
             (const float4*)x_data,
             (const float4*)y_data,
@@ -3195,7 +3343,7 @@ void kernel_ops::mse(void* out_data, const void* x_data, const void* y_data, siz
     // Else fallback to element-wise
     else
     {
-        CUDA_LAUNCH(mse_kernel<BLOCK>, 1, BLOCK,
+        CUDA_LAUNCH(mse_kernel<BLOCK>, grid_size, BLOCK,
             (float*)out_data,
             (const float*)x_data,
             (const float*)y_data,
@@ -3203,6 +3351,133 @@ void kernel_ops::mse(void* out_data, const void* x_data, const void* y_data, siz
         );
         CUDA_CHECK(cudaGetLastError());
     }
+}
+
+template<int BLOCK>
+__global__ void cross_entropy_loss_kernel(float* __restrict__ out, float* __restrict__ probs, const float* __restrict__ logits, const int* __restrict__ labels, size_t num_cases, size_t num_classes)
+{
+    size_t row = blockIdx.x;
+
+    const float* base_logits = logits + row * num_classes;
+    float* base_probs = probs + row * num_classes;
+
+    // Shared maximum and sum.
+    __shared__ float sh_max;
+    __shared__ float sh_sum;
+
+    // First pass compute max.
+    float max = -CUDART_INF_F;
+    for (size_t i = threadIdx.x; i < num_classes; i += BLOCK)
+        max = fmaxf(max, base_logits[i]);
+
+    // synch max.
+    max = block_max<BLOCK>(max);
+    if (threadIdx.x == 0) sh_max = max;
+    __syncthreads();
+    max = sh_max;
+
+    // Second pass compute exponential and accumulate sum.
+    float sum = 0.0f;
+    for (size_t i = threadIdx.x; i < num_classes; i += BLOCK)
+    {
+        float exp = __expf(base_logits[i] - max);
+        base_probs[i] = exp;
+        sum += exp;
+    }
+
+    // synch sum.
+    sum = block_sum<BLOCK>(sum);
+    if (threadIdx.x == 0) sh_sum = sum;
+    __syncthreads();
+    float inv_s = 1.f / sh_sum;
+
+    // Third pass divides by sum.
+    for (size_t i = threadIdx.x; i < num_classes; i += BLOCK)
+        base_probs[i] *= inv_s;
+
+    // Now compute loss.
+    if (threadIdx.x == 0)
+    {
+        int label = labels[row];
+        assert(label >= 0 && label < num_classes && "Label out of range found during a cross-entropy loss computation.");
+
+        atomicAdd(out, (-base_logits[label] + max + logf(sum)) / num_cases);
+    }
+
+}
+void kernel_ops::cross_entropy_loss(void* out_data, void* probs_data, const void* logits_data, const void* labels_data, size_t num_cases, size_t num_classes)
+{
+    constexpr int BLOCK = 256;
+
+    CUDA_LAUNCH(cross_entropy_loss_kernel<BLOCK>, (unsigned)num_cases, BLOCK,
+        (float*)out_data,
+        (float*)probs_data,
+        (const float*)logits_data,
+        (const int*)labels_data,
+        num_cases, num_classes
+    );
+    CUDA_CHECK(cudaGetLastError());
+}
+
+template<int BLOCK>
+__global__ void negative_log_likelihood_kernel(float* __restrict__ out, const float* __restrict__ probs, const int* __restrict__ labels, size_t num_cases, size_t num_classes)
+{
+    size_t total_threads = blockDim.x * gridDim.x;
+
+    float sum = 0.0f;
+    for (size_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < num_cases; idx += total_threads)
+    {
+        // Retrieve label for this case.
+        int label = labels[idx];
+        assert(label >= 0 && label < num_classes && "Label out of range found during a negative log likelihood computation.");
+
+        // Add negative log of this case to the sum.
+        sum += -logf(probs[idx * num_classes + label]);
+    }
+
+    // Combine all block sums.
+    sum = block_sum<BLOCK>(sum);
+    
+    // Combine all grid sums.
+    if (threadIdx.x == 0)
+        atomicAdd(out, sum / num_cases);
+}
+void kernel_ops::negative_log_likelihood(void* out_data, const void* probs_data, const void* labels_data, size_t num_cases, size_t num_classes)
+{
+    constexpr int BLOCK = 256;
+    const int grid_size = device::sm_count() * 4;
+
+    CUDA_LAUNCH(negative_log_likelihood_kernel<BLOCK>, grid_size, BLOCK,
+        (float*)out_data,
+        (const float*)probs_data,
+        (const int*)labels_data,
+        num_cases, num_classes
+    );
+    CUDA_CHECK(cudaGetLastError());
+}
+
+__global__ void one_hot_kernel(float* __restrict__ out, const int* __restrict__ labels, size_t num_cases, size_t num_classes)
+{
+    size_t total_threads = blockDim.x * gridDim.x;
+
+    for (size_t case_idx = blockIdx.x * blockDim.x + threadIdx.x; case_idx < num_cases; case_idx += total_threads)
+    {
+        int label = labels[case_idx];
+        assert(label >= 0 && label < num_classes && "Label out of range during one-hot encoding.");
+        out[case_idx * num_classes + label] = 1.f;
+    }
+}
+void kernel_ops::one_hot(void* out_data, const void* labels_data, size_t num_cases, size_t num_classes)
+{
+    const int BLOCK_SIZE = 256;
+    const int grid_size = device::sm_count() * 4;
+
+    CUDA_LAUNCH(one_hot_kernel, grid_size, BLOCK_SIZE,
+        (float*)out_data,
+        (const int*)labels_data,
+        num_cases, num_classes
+    );
+    CUDA_CHECK(cudaGetLastError());
 }
 
 __global__ void causal_mask_kernel(float* __restrict__ out, int L)

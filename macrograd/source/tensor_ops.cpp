@@ -58,6 +58,60 @@ Tensor Tensor::internal_copy(bool with_grad, bool copy_grad) const
 	return out;
 }
 
+// Returns a tensor containing the leading dimensions with the indices specified. Does not have grad.
+
+Tensor Tensor::operator[](const VectorInt& idxs) const
+{
+	TENSOR_CHECK(idxs.len(),
+		"Trying to use Tensor::operator[] with empty indices is not allowed."
+	);
+	TENSOR_CHECK(is_init(),
+		"Trying to use operator[] on an empty tensor is not allowed."
+	);
+	TENSOR_CHECK(idxs.is_gpu() == is_gpu(),
+		"Trying to call operator[] with indices and tensor in different devices."
+	);
+	TENSOR_CHECK(!has_grad(),
+		"Tensor::operator[] being called from a tensor that has gradient.\n"
+		"Backpropagation is not implemented for this operator, consider using subset() instead.\n"
+		"If you still want to use [] please call no_grad() right before to avoid this message."
+	);
+
+	// Create shape with leading dimension changed.
+	Shape out_shape = _view;
+	out_shape[0] = idxs.len();
+
+	// Initialize output tensor.
+	Tensor out(out_shape, device(), false);
+
+	// Extract relevant data.
+	const int* idxs_data = idxs.data();
+	unsigned length = idxs.len();
+	unsigned size0 = _view[0];
+	unsigned stride = _stride[0];
+	float* out_data = __dataof(out);
+	float* ten_data = __data;
+
+	// Now let's indexate this tensor.
+	if (out.is_gpu())
+		kernel_ops::tensor_bracket_op(out_data, ten_data, idxs_data, length, stride, size0);
+	else
+	{
+		// Iterate through the indices and memcpy.
+		for (unsigned i = 0; i < length; i++)
+		{
+			int idx = idxs_data[i];
+			TENSOR_CHECK(idx >= 0 && (unsigned)idx < size0,
+				"Idx out of bounds find during an operator [] call.\n"
+				"Make sure your indices are in the range [0, size(0) - 1]. Idx found: %i", idx
+			);
+			memcpy(out_data + stride * i, ten_data + stride * idx, stride * sizeof(float));
+		}
+	}
+	// Return the tensor.
+	return out;
+}
+
 void Tensor::internal_add(float val)
 {
 	TENSOR_CHECK(is_init(),
@@ -489,13 +543,6 @@ Tensor Tensor::unsqueeze(int dim) const
 --------------------------------------------------------------------------------------------------------------------------
 */
 
-// Returns a tensor containing the leading dimensions with the indices specified.
-
-Tensor Tensor::operator[](const VectorInt& idxs) const
-{
-	return Tensor();
-}
-
 // Returns a tensor with the specified dimensions transposed.
 
 Tensor Tensor::transpose(int dim0, int dim1) const
@@ -572,7 +619,7 @@ Tensor Tensor::transpose(int dim0, int dim1) const
 
 	// Now we actually transpose the tensor.
 	if (out.is_gpu())
-		kernel_ops::transpose(out_data, ten_data, A, B, outter_stride, middle_size, inner_size, ten_stride, out_stride);
+		kernel_ops::transpose(out_data, ten_data, A, B, outter_size, middle_size, inner_size, ten_stride, out_stride);
 	else
 	{
 		for (unsigned outter = 0; outter < outter_size; outter++)
@@ -4039,7 +4086,7 @@ Tensor Functional::cross_entropy_loss(const Tensor& logits, const VectorInt& lab
 	public:
 		// Constructor, stores all the data of the operation.
 		CelOp(const Tensor& _logits, const Tensor& _probs, const Tensor& _out, const VectorInt& _labels) : TensorOp{ "Cross-Entropy Loss", _out },
-			logits{ _logits }, probs{ _probs }, labels{ Functional::one_hot(_logits.shape(), _labels) }, size{ _logits.size(0) }
+			logits{ _logits }, probs{ _probs }, labels{ Functional::one_hot(_labels, _probs._view[-1])}, size{_logits.size(0)}
 		{
 			_relatives[0] = &logits;
 		}
@@ -4058,19 +4105,27 @@ Tensor Functional::cross_entropy_loss(const Tensor& logits, const VectorInt& lab
 	// Make sure shape is correct.
 	TENSOR_CHECK(logits.dim() == 2,
 		"Invalid shape found in logits for cross-entropy loss.\n"
-		"Make sure your logits have shape (n_cases, n_labels) to avoid any ambiguity.\n"
+		"Make sure your logits have shape (n_cases, n_classes) to avoid any ambiguity.\n"
 		"Logits shape found: %s", logits._view.str()
 	);
 	TENSOR_CHECK(logits._view[-1] > 1,
 		"Invalid shape found in logits for cross-entropy loss.\n"
-		"Make sure your logits have shape (n_cases, n_labels).\n" 
-		"Found only one label, this makes the operation a no-op and is most likely unintentional.\n"
+		"Make sure your logits have shape (n_cases, n_classes).\n" 
+		"Found only one class, this makes the operation a no-op and is most likely unintentional.\n"
 		"Logits shape found: %s", logits._view.str()
 	);
 	TENSOR_CHECK(logits._view[0] != 0,
 		"Found zero number of cases for cross-entropy loss.\n"
 		"There must be at least one case, void tensors are not allowed.\n"
 		"Logits shape found: %s", logits._view.str()
+	);
+	TENSOR_CHECK(labels.is_gpu() == logits.is_gpu(),
+		"Logits and labels found in different devices inside a cross-entropy loss call."
+	);
+	TENSOR_CHECK((int)labels.len() >= logits._view[0],
+		"Insuficient amount of labels found inside a cross-entropy loss call.\n"
+		"Make sure the length of the labels vector is at least the amount of cases.\n"
+		"Logits shape found: %s | Labels count: %u", logits._view.str(), labels.len()
 	);
 
 	// First do softmax without gradient.
@@ -4082,51 +4137,55 @@ Tensor Functional::cross_entropy_loss(const Tensor& logits, const VectorInt& lab
 	// Get number of cases.
 	unsigned size = logits._view[0];
 
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* probs_data = __dataof(probs);
+	float* logits_data = __dataof(logits);
+	const int* labels_data = labels.data();
+
+	// Get relevant stride.
+	const unsigned num_classes = logits._view[-1];
+
 	// Now compute the actual cross-entropy loss.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::cross_entropy_loss(out_data, probs_data, logits_data, labels_data, size, num_classes);
 	else
 	{
-		// Extract the data.
-		float& out_data = *__dataof(out);
-		float* probs_data = __dataof(probs);
-		float* logits_data = __dataof(logits);
-		// Get relevant stride.
-		const unsigned n_labels = logits._view[-1];
 		// Add all loss values and compute all probs.
 		for (unsigned i = 0; i < size; i++)
 		{
-			float* p_probs = probs_data + i * n_labels;
-			float* p_logits = logits_data + i * n_labels;
+			// Get the correct label.
+			int label = labels_data[i];
+
+			float* p_probs = probs_data + i * num_classes;
+			float* p_logits = logits_data + i * num_classes;
 			
-			TENSOR_CHECK(labels[i] < (int)n_labels && labels[i] >= 0,
+			TENSOR_CHECK(label < (int)num_classes && label >= 0,
 				"Label out of range found inside cross-entropy loss computation.\n"
-				"Make sure your labels are in the range [0, logits.size(-1) - 1]."
+				"Make sure your labels are in the range [0, num_classes - 1]."
 			);
 
 			// First pass find maximum.
 			float max = *p_logits;
-			for (unsigned idx = 1; idx < n_labels; idx++)
+			for (unsigned idx = 1; idx < num_classes; idx++)
 				if (p_logits[idx] > max)
 					max = p_logits[idx];
 			// Second pass compute exponential and accumulate sum.
 			float sum = 0.f;
-			for (unsigned idx = 0; idx < n_labels; idx++)
+			for (unsigned idx = 0; idx < num_classes; idx++)
 			{
 				p_probs[idx] = expf(p_logits[idx] - max);
 				sum += p_probs[idx];
 			}
 			// Now compute loss.
-			out_data += -p_logits[labels[i]] + max + logf(sum);
+			*out_data += -p_logits[label] + max + logf(sum);
 
 			// Third pass divide by sum.
-			for (unsigned idx = 0; idx < n_labels; idx++)
+			for (unsigned idx = 0; idx < num_classes; idx++)
 				p_probs[idx] /= sum;
 		}
 		// Divide by number of cases.
-		out_data /= size;
+		*out_data /= size;
 	}
 
 	// If it was a gradient operation store a CelOp instance.
@@ -4151,7 +4210,7 @@ Tensor Functional::negative_log_likelihood(const Tensor& probs, const VectorInt&
 	public:
 		// Constructor, stores all the data of the operation.
 		NllOp(const Tensor& _probs, const Tensor& _out, const VectorInt& _labels) : TensorOp{ "Negative Log Likelihood", _out },
-			probs{ _probs }, labels{ Functional::one_hot(_probs.shape(), _labels) }, size{ _probs.size(0) }
+			probs{ _probs }, labels{ Functional::one_hot(_labels, _probs._view[-1])}, size{_probs.size(0)}
 		{
 			_relatives[0] = &probs;
 		}
@@ -4170,19 +4229,27 @@ Tensor Functional::negative_log_likelihood(const Tensor& probs, const VectorInt&
 	// Make sure shape is correct.
 	TENSOR_CHECK(probs.dim() == 2,
 		"Invalid shape found in probabilities for negative log likelihood.\n"
-		"Make sure your probs have shape (n_cases, n_labels) to avoid any ambiguity.\n"
+		"Make sure your probs have shape (n_cases, n_classes) to avoid any ambiguity.\n"
 		"Probs shape found: %s", probs._view.str()
 	);
 	TENSOR_CHECK(probs._view[-1] > 1,
 		"Invalid shape found in probabilities for negative log likelihood.\n"
-		"Make sure your probs have shape (n_cases, n_labels).\n"
-		"Found only one label, this makes the operation a no-op and is most likely unintentional.\n"
+		"Make sure your probs have shape (n_cases, n_classes).\n"
+		"Found only one class, this makes the operation a no-op and is most likely unintentional.\n"
 		"Probs shape found: %s", probs._view.str()
 	);
 	TENSOR_CHECK(probs._view[0] != 0,
 		"Found zero number of cases for negative log likelihood.\n"
 		"There must be at least one case, void tensors are not allowed.\n"
 		"Probs shape found: %s", probs._view.str()
+	);
+	TENSOR_CHECK(labels.is_gpu() == probs.is_gpu(),
+		"Probabilities and labels found in different devices inside a negative log likelihood call."
+	);
+	TENSOR_CHECK((int)labels.len() >= probs._view[0],
+		"Insuficient amount of labels found inside a negative log likelihood call.\n"
+		"Make sure the length of the labels vector is at least the amount of cases.\n"
+		"Probs shape found: %s | Labels count: %u", probs._view.str(), labels.len()
 	);
 
 	// Create single element output.
@@ -4191,30 +4258,34 @@ Tensor Functional::negative_log_likelihood(const Tensor& probs, const VectorInt&
 	// Get number of cases.
 	unsigned size = probs._view[0];
 
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* probs_data = __dataof(probs);
+	const int* labels_data = labels.data();
+
+	// Get relevant stride.
+	const unsigned num_classes = probs._view[-1];
+
 	// Now compute the actual cross-entropy loss.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::negative_log_likelihood(out_data, probs_data, labels_data, size, num_classes);
 	else
 	{
-		// Extract the data.
-		float& out_data = *__dataof(out);
-		float* probs_data = __dataof(probs);
-		// Get relevant stride.
-		const unsigned n_labels = probs._view[-1];
 		// Add all loss values.
 		for (unsigned i = 0; i < size; i++)
 		{
-			TENSOR_CHECK(labels[i] < (int)n_labels && labels[i] >= 0,
+			// Get the label.
+			int label = labels_data[i];
+
+			TENSOR_CHECK(label < (int)num_classes && label >= 0,
 				"Label out of range found inside negative log likelihood computation.\n"
-				"Make sure your labels are in the range [0, probs.size(-1) - 1]."
+				"Make sure your labels are in the range [0, num_classes - 1]."
 			);
-			out_data += -logf(probs_data[i * n_labels + labels[i]]);
+			*out_data += -logf(probs_data[i * num_classes + label]);
 		}
 
 		// Divide by number of cases.
-		out_data /= size;
+		*out_data /= size;
 	}
 
 	// If it was a gradient operation store a NllOp instance.
@@ -4225,44 +4296,46 @@ Tensor Functional::negative_log_likelihood(const Tensor& probs, const VectorInt&
 	return out;
 }
 
-Tensor Functional::one_hot(const Shape& shape, const VectorInt& labels)
+Tensor Functional::one_hot(const VectorInt& labels, unsigned num_classes)
 {
 	// Size must be correct.
-	TENSOR_CHECK(shape.dim() == 2,
-		"Invalid shape found in one-hot encoding.\n"
-		"Make sure your shape is (n_cases, n_labels) to avoid any ambiguity.\n"
-		"Shape found: %s", shape.str()
+	TENSOR_CHECK(num_classes > 1,
+		"Invalid number of classes found in one-hot encoding. Found num_classes less than two.\n"
+		"This makes the operation a no-op and is most likely unintentional.\n"
 	);
-	TENSOR_CHECK(shape[-1] > 1,
-		"Invalid shape found in one-hot encoding.\n"
-		"Make sure your shape is (n_cases, n_labels).\n"
-		"Found only one label, this makes the operation a no-op and is most likely unintentional.\n"
-		"Shape found: %s", shape.str()
+	TENSOR_CHECK(labels.len(),
+		"Uninitialized label vector can not be used to generate a one-hot encoding.\n"
+		"Please make sure your labels vector has at least one case.\n"
 	);
+
+	// Generate output shape.
+	Shape shape(labels.len(), num_classes);
 
 	// Create output tensor.
 	Tensor out(shape, labels.device(), false);
 
+	// Extract the data.
+	float* out_data = out.internal_data();
+	const int* labels_data = labels.data();
+	// Get relevant stride.
+	const unsigned n_cases = labels.len();
+
 	// Now we one-hot these vectors.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::one_hot(out_data, labels_data, n_cases, num_classes);
 	else
 	{
-		// Extract the data.
-		float* out_data = out.internal_data();
-		// Get relevant stride.
-		const unsigned n_labels = shape[-1];
-		const unsigned n_cases = shape[0];
-		// One-hot this.
+		// Itearate through all cases.
 		for (unsigned i = 0; i < n_cases; i++)
 		{
-			TENSOR_CHECK(labels[i] < (int)n_labels && labels[i] >= 0,
+			// Get the label.
+			int label = labels_data[i];
+
+			TENSOR_CHECK(label < (int)num_classes && label >= 0,
 				"Label out of range found inside a one-hot encoding.\n"
-				"Make sure your labels are in the range [0, shape(-1) - 1]."
+				"Make sure your labels are in the range [0, num_classes - 1]."
 			);
-			out_data[i * n_labels + labels[i]] = 1.f;
+			out_data[i * num_classes + label] = 1.f;
 		}
 	}
 
@@ -4388,7 +4461,7 @@ int Random::rand_int(int min, int max)
 --------------------------------------------------------------------------------------------------------------------------
 */
 
-const Tensor& Initialization::normal(const Tensor& tensor, float mean, float std)
+void Initialization::normal(Tensor& tensor, float mean, float std)
 {
 	TENSOR_CHECK(tensor.is_init(),
 		"Found an empty tensor inside unifor initialization, please make sure your tensor is initialized."
@@ -4405,10 +4478,9 @@ const Tensor& Initialization::normal(const Tensor& tensor, float mean, float std
 		while (idx < numel)
 			data[idx++] = random_norm() * std + mean;
 	}
-	return tensor;
 }
 
-const Tensor& Initialization::uniform(const Tensor& tensor, float min, float max)
+void Initialization::uniform(Tensor& tensor, float min, float max)
 {
 	TENSOR_CHECK(tensor.is_init(),
 		"Found an empty tensor inside unifor initialization, please make sure your tensor is initialized."
@@ -4425,5 +4497,4 @@ const Tensor& Initialization::uniform(const Tensor& tensor, float min, float max
 		while(idx < numel)
 			data[idx++] = random_0_1() * (max - min) + min;
 	}
-	return tensor;
 }

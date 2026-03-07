@@ -37,24 +37,18 @@ namespace cuda
 namespace kernel_ops
 {
 	void set_scalar(void* out_data, float val, size_t num_elements);
-
 	void add_scalar(void* out_data, const void* ten_data, float val, size_t num_elements);
-
 	void add_tensor(void* out_data, const void* sum0_data, const void* sum1_data, size_t num_elements);
-
 	void multiply_scalar(void* out_data, const void* fac_data, float val, size_t num_elements);
-
 	void multiply_tensor(void* out_data, const void* fac0_data, const void* fac1_data, size_t num_elements);
-
 	void subtract_from_scalar(void* out_data, const void* sub_data, float val, size_t num_elements);
-
 	void divide_from_scalar(void* out_data, const void* den_data, float val, size_t num_elements);
-
 	void add_multiply_scalar_tensor(void* out_data, float val, const void* fac_data, size_t num_elements);
-
 	void subtract_tensor(void* out_data, const void* sum_data, const void* sub_data, size_t num_elements);
-
 	void divide_tensor(void* out_data, const void* num_data, const void* den_data, size_t num_elements);
+
+	void tensor_bracket_op(void* out_data, const void* ten_data, const void* indices_data, size_t num_indices, size_t stride, size_t range);
+	void vector_bracket_op(void* out_data, const void* vec_data, const void* indices_data, size_t num_indices, size_t range);
 
 	// --- Element-Wise Operators ---
 
@@ -99,6 +93,9 @@ namespace kernel_ops
 	void matmul_bias(void* out_data, const void* A_data, const void* B_data, const void* bias, const Shape& out_shape, const Shape& A_shape, const Shape& B_shape, const Shape& bias_shape);
 	void cat(void* out_data, const void* in0_data, const void* in1_data, size_t inner_size, size_t outer_size, int size0, int size1);
 	void mse(void* out_data, const void* x_data, const void* y_data, size_t num_elements);
+	void cross_entropy_loss(void* out_data, void* probs_data, const void* logits_data, const void* labels_data, size_t num_cases, size_t num_classes);
+	void negative_log_likelihood(void* out_data, const void* probs_data, const void* labels_data, size_t num_cases, size_t num_classes);
+	void one_hot(void* out_data, const void* labels_data, size_t num_cases, size_t num_classes);
 	void causal_mast(void* out_data, int L);
 
 	// --- Regular Operators ---

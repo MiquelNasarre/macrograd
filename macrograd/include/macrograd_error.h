@@ -56,4 +56,8 @@ private:
 #define TENSOR_ERROR(...) MacrogradError(__LINE__,__FILE__,__VA_ARGS__).PrintAbort()
 
 // Checks expression, if false raises an error.
+#ifndef NDEBUG
 #define TENSOR_CHECK(expr, ...) do { if (!(expr)) { TENSOR_ERROR(__VA_ARGS__); } } while(0)
+#else
+#define TENSOR_CHECK(expr, ...) {}
+#endif

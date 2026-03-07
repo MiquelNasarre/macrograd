@@ -54,9 +54,9 @@ private:
 	void reduce_instance_count();
 public:
 	explicit VectorInt() = default;
-	explicit VectorInt(const VectorInt& other) { *this = other; }
 	explicit VectorInt(unsigned length, const char* device = "cpu");
 	VectorInt(int a, int b, int stride = 1, const char* device = "cpu");
+	VectorInt(const VectorInt& other) { *this = other; }
 	~VectorInt() { reduce_instance_count(); }
 	VectorInt& operator=(const VectorInt& other);
 
@@ -91,7 +91,7 @@ namespace Functional
 	Tensor mean_squared_error(const Tensor& ten0, const Tensor& ten1);
 	Tensor cross_entropy_loss(const Tensor& logits, const VectorInt& labels);
 	Tensor negative_log_likelihood(const Tensor& probs, const VectorInt& labels);
-	Tensor one_hot(const Shape& size_x_labels, const VectorInt& labels);
+	Tensor one_hot(const VectorInt& labels, unsigned num_classes);
 	Tensor causal_mask(unsigned L, const char* device = "cpu");
 }
 namespace Random
@@ -105,8 +105,8 @@ namespace Random
 }
 namespace Initialization
 {
-	const Tensor& normal(const Tensor& tensor, float mean = 0.f, float std = 1.f);
-	const Tensor& uniform(const Tensor& tensor, float min = 0.f, float max = 1.f);
+	void normal(Tensor& tensor, float mean = 0.f, float std = 1.f);
+	void uniform(Tensor& tensor, float min = 0.f, float max = 1.f);
 }
 
 // No operators are in-place except for the equality operator. All others create a new tensor which can be 
@@ -221,10 +221,14 @@ public:
 	// Internal helpers to modify data without affecting anything else. If using tensors numel must match. 
 	// Functions are public for convenience but they cannot be used inside neural networks logic.
 
-	float* internal_data() const { return _internals ? (float*)_internals->_data : nullptr; }
+	float* internal_data()				{ return _internals ? (float*)_internals->_data : nullptr; }
+	const float* internal_data() const	{ return _internals ? (float*)_internals->_data : nullptr; }
 
 	Tensor& internal_gradient();
 	Tensor internal_copy(bool with_grad, bool copy_grad) const;
+
+	// Returns a tensor containing the leading dimensions with the indices specified. Does not have grad.
+	Tensor operator[](const VectorInt& idxs) const;
 
 	void internal_add(float val);
 	void internal_multiply(float val);
@@ -256,8 +260,6 @@ public:
 	Tensor unsqueeze(int dim) const;		// Returns a tensor with an added dimension 1 in view, in the specified spot.
 
 	// --- Shape operators ---
-
-	Tensor operator[](const VectorInt& idxs) const;							// Returns a tensor containing the leading dimensions with the indices specified.
 
 	Tensor transpose(int dim0, int dim1) const;								// Returns a tensor with the specified dimensions transposed.
 	Tensor subset(const Shape& shape, const Shape& start_indices) const;	// Returns a subset of the tensor with the specified shape starting from the specified indices.
