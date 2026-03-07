@@ -9,6 +9,7 @@
 #include <curand_kernel.h>
 #include <math_constants.h>
 #include <device_launch_parameters.h>
+#include <thrust/sort.h>
 
 /*
 --------------------------------------------------------------------------------------------------------------------------
@@ -211,14 +212,14 @@ void kernel_ops::set_scalar(void* out_data, float val, size_t num_elements)
     }
 }
 
-__global__ void add_scalar_kernel_vec(float4* out, float val, size_t num_vec)
+__global__ void add_scalar_kernel_vec(float4* out, const float4* in, float val, size_t num_vec)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = blockDim.x * gridDim.x;
 
     for (size_t i = idx; i < num_vec; i += stride)
     {
-        float4 ov = out[i];
+        float4 ov = in[i];
 
         ov.x += val;
         ov.y += val;
@@ -228,15 +229,15 @@ __global__ void add_scalar_kernel_vec(float4* out, float val, size_t num_vec)
         out[i] = ov;
     }
 }
-__global__ void add_scalar_kernel(float* out, float val, size_t num_elements)
+__global__ void add_scalar_kernel(float* out, const float* in, float val, size_t num_elements)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = blockDim.x * gridDim.x;
 
     for (size_t i = idx; i < num_elements; i += stride)
-        out[i] += val;
+        out[i] = in[i] + val;
 }
-void kernel_ops::add_scalar(void* out_data, float val, size_t num_elements)
+void kernel_ops::add_scalar(void* out_data, const void* ten_data, float val, size_t num_elements)
 {
     const int BLOCK_SIZE = 256;
     const int grid_size = device::sm_count() * 4;
@@ -247,6 +248,7 @@ void kernel_ops::add_scalar(void* out_data, float val, size_t num_elements)
     {
         CUDA_LAUNCH(add_scalar_kernel_vec, grid_size, BLOCK_SIZE,
             (float4*)out_data,
+            (const float4*)ten_data,
             val,
             num_vec
         );
@@ -260,6 +262,7 @@ void kernel_ops::add_scalar(void* out_data, float val, size_t num_elements)
         size_t offset = num_vec * 4;
         CUDA_LAUNCH(add_scalar_kernel, grid_size, BLOCK_SIZE,
             (float*)out_data + offset,
+            (const float*)ten_data + offset,
             val,
             remainder
         );
@@ -267,64 +270,7 @@ void kernel_ops::add_scalar(void* out_data, float val, size_t num_elements)
     }
 }
 
-__global__ void add_tensor_kernel_vec(float4* out, const float4* sum, size_t num_vec)
-{
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    size_t stride = blockDim.x * gridDim.x;
-
-    for (size_t i = idx; i < num_vec; i += stride)
-    {
-        float4 ov = out[i];
-        float4 sv = sum[i];
-
-        ov.x += sv.x;
-        ov.y += sv.y;
-        ov.z += sv.z;
-        ov.w += sv.w;
-
-        out[i] = ov;
-    }
-}
-__global__ void add_tensor_kernel(float* out, const float* sum, size_t num_elements)
-{
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    size_t stride = blockDim.x * gridDim.x;
-
-    for (size_t i = idx; i < num_elements; i += stride)
-        out[i] += sum[i];
-}
-void kernel_ops::add_tensor(void* out_data, const void* sum_data, size_t num_elements)
-{
-    const int BLOCK_SIZE = 256;
-    const int grid_size = device::sm_count() * 4;
-
-    // Vectorized addition
-    size_t num_vec = num_elements / 4;
-    if (num_vec)
-    {
-        CUDA_LAUNCH(add_tensor_kernel_vec, grid_size, BLOCK_SIZE,
-            (float4*)out_data,
-            (const float4*)sum_data,
-            num_vec
-        );
-        CUDA_CHECK(cudaGetLastError());
-    }
-
-    // Remainder addition
-    size_t remainder = num_elements % 4;
-    if (remainder)
-    {
-        size_t offset = num_vec * 4;
-        CUDA_LAUNCH(add_tensor_kernel, grid_size, BLOCK_SIZE,
-            (float*)out_data + offset,
-            (const float*)sum_data + offset,
-            remainder
-        );
-        CUDA_CHECK(cudaGetLastError());
-    }
-}
-
-__global__ void add_tensor_tensor_kernel_vec(float4* out, const float4* sum0, const float4* sum1, size_t num_vec)
+__global__ void add_tensor_kernel_vec(float4* out, const float4* sum0, const float4* sum1, size_t num_vec)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = blockDim.x * gridDim.x;
@@ -343,7 +289,7 @@ __global__ void add_tensor_tensor_kernel_vec(float4* out, const float4* sum0, co
         out[i] = ov;
     }
 }
-__global__ void add_tensor_tensor_kernel(float* out, const float* sum0, const float* sum1, size_t num_elements)
+__global__ void add_tensor_kernel(float* out, const float* sum0, const float* sum1, size_t num_elements)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = blockDim.x * gridDim.x;
@@ -351,7 +297,7 @@ __global__ void add_tensor_tensor_kernel(float* out, const float* sum0, const fl
     for (size_t i = idx; i < num_elements; i += stride)
         out[i] = sum0[i] + sum1[i];
 }
-void kernel_ops::add_tensor_tensor(void* out_data, const void* sum0_data, const void* sum1_data, size_t num_elements)
+void kernel_ops::add_tensor(void* out_data, const void* sum0_data, const void* sum1_data, size_t num_elements)
 {
     const int BLOCK_SIZE = 256;
     const int grid_size = device::sm_count() * 4;
@@ -360,7 +306,7 @@ void kernel_ops::add_tensor_tensor(void* out_data, const void* sum0_data, const 
     size_t num_vec = num_elements / 4;
     if (num_vec)
     {
-        CUDA_LAUNCH(add_tensor_tensor_kernel_vec, grid_size, BLOCK_SIZE,
+        CUDA_LAUNCH(add_tensor_kernel_vec, grid_size, BLOCK_SIZE,
             (float4*)out_data, 
             (const float4*)sum0_data, 
             (const float4*)sum1_data, 
@@ -374,7 +320,7 @@ void kernel_ops::add_tensor_tensor(void* out_data, const void* sum0_data, const 
     if (remainder)
     {
         size_t offset = num_vec * 4;
-        CUDA_LAUNCH(add_tensor_tensor_kernel, grid_size, BLOCK_SIZE,
+        CUDA_LAUNCH(add_tensor_kernel, grid_size, BLOCK_SIZE,
             (float*)out_data + offset, 
             (const float*)sum0_data + offset, 
             (const float*)sum1_data + offset, 
@@ -384,32 +330,32 @@ void kernel_ops::add_tensor_tensor(void* out_data, const void* sum0_data, const 
     }
 }
 
-__global__ void multiply_scalar_kernel_vec(float4* out, float val, size_t num_vec)
+__global__ void multiply_scalar_kernel_vec(float4* out, const float4* in, float val, size_t num_vec)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = blockDim.x * gridDim.x;
 
     for (size_t i = idx; i < num_vec; i += stride)
     {
-        float4 ov = out[i];
+        float4 iv = in[i];
 
-        ov.x *= val;
-        ov.y *= val;
-        ov.z *= val;
-        ov.w *= val;
+        iv.x = iv.x * val;
+        iv.y = iv.y * val;
+        iv.z = iv.z * val;
+        iv.w = iv.w * val;
 
-        out[i] = ov;
+        out[i] = iv;
     }
 }
-__global__ void multiply_scalar_kernel(float* out, float val, size_t num_elements)
+__global__ void multiply_scalar_kernel(float* out, const float* in, float val, size_t num_elements)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = blockDim.x * gridDim.x;
 
     for (size_t i = idx; i < num_elements; i += stride)
-        out[i] *= val;
+        out[i] = in[i] * val;
 }
-void kernel_ops::multiply_scalar(void* out_data, float val, size_t num_elements)
+void kernel_ops::multiply_scalar(void* out_data, const void* fac_data, float val, size_t num_elements)
 {
     const int BLOCK_SIZE = 256;
     const int grid_size = device::sm_count() * 4;
@@ -420,6 +366,7 @@ void kernel_ops::multiply_scalar(void* out_data, float val, size_t num_elements)
     {
         CUDA_LAUNCH(multiply_scalar_kernel_vec, grid_size, BLOCK_SIZE,
             (float4*)out_data,
+            (const float4*)fac_data,
             val,
             num_vec
         );
@@ -433,6 +380,7 @@ void kernel_ops::multiply_scalar(void* out_data, float val, size_t num_elements)
         size_t offset = num_vec * 4;
         CUDA_LAUNCH(multiply_scalar_kernel, grid_size, BLOCK_SIZE,
             (float*)out_data + offset,
+            (const float*)fac_data + offset,
             val,
             remainder
         );
@@ -440,64 +388,7 @@ void kernel_ops::multiply_scalar(void* out_data, float val, size_t num_elements)
     }
 }
 
-__global__ void multiply_tensor_kernel_vec(float4* out, const float4* fac, size_t num_vec)
-{
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    size_t stride = blockDim.x * gridDim.x;
-
-    for (size_t i = idx; i < num_vec; i += stride)
-    {
-        float4 ov = out[i];
-        float4 sv = fac[i];
-
-        ov.x *= sv.x;
-        ov.y *= sv.y;
-        ov.z *= sv.z;
-        ov.w *= sv.w;
-
-        out[i] = ov;
-    }
-}
-__global__ void multiply_tensor_kernel(float* out, const float* fac, size_t num_elements)
-{
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    size_t stride = blockDim.x * gridDim.x;
-
-    for (size_t i = idx; i < num_elements; i += stride)
-        out[i] *= fac[i];
-}
-void kernel_ops::multiply_tensor(void* out_data, const void* fac_data, size_t num_elements)
-{
-    const int BLOCK_SIZE = 256;
-    const int grid_size = device::sm_count() * 4;
-
-    // Vectorized addition
-    size_t num_vec = num_elements / 4;
-    if (num_vec)
-    {
-        CUDA_LAUNCH(multiply_tensor_kernel_vec, grid_size, BLOCK_SIZE,
-            (float4*)out_data,
-            (const float4*)fac_data,
-            num_vec
-        );
-        CUDA_CHECK(cudaGetLastError());
-    }
-
-    // Remainder addition
-    size_t remainder = num_elements % 4;
-    if (remainder)
-    {
-        size_t offset = num_vec * 4;
-        CUDA_LAUNCH(multiply_tensor_kernel, grid_size, BLOCK_SIZE,
-            (float*)out_data + offset,
-            (const float*)fac_data + offset,
-            remainder
-        );
-        CUDA_CHECK(cudaGetLastError());
-    }
-}
-
-__global__ void multiply_tensor_tensor_kernel_vec(float4* out, const float4* fac0, const float4* fac1, size_t num_vec)
+__global__ void multiply_tensor_kernel_vec(float4* out, const float4* fac0, const float4* fac1, size_t num_vec)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = blockDim.x * gridDim.x;
@@ -516,7 +407,7 @@ __global__ void multiply_tensor_tensor_kernel_vec(float4* out, const float4* fac
         out[i] = ov;
     }
 }
-__global__ void multiply_tensor_tensor_kernel(float* out, const float* fac0, const float* fac1, size_t num_elements)
+__global__ void multiply_tensor_kernel(float* out, const float* fac0, const float* fac1, size_t num_elements)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = blockDim.x * gridDim.x;
@@ -524,7 +415,7 @@ __global__ void multiply_tensor_tensor_kernel(float* out, const float* fac0, con
     for (size_t i = idx; i < num_elements; i += stride)
         out[i] = fac0[i] * fac1[i];
 }
-void kernel_ops::multiply_tensor_tensor(void* out_data, const void* fac0_data, const void* fac1_data, size_t num_elements)
+void kernel_ops::multiply_tensor(void* out_data, const void* fac0_data, const void* fac1_data, size_t num_elements)
 {
     const int BLOCK_SIZE = 256;
     const int grid_size = device::sm_count() * 4;
@@ -533,7 +424,7 @@ void kernel_ops::multiply_tensor_tensor(void* out_data, const void* fac0_data, c
     size_t num_vec = num_elements / 4;
     if (num_vec)
     {
-        CUDA_LAUNCH(multiply_tensor_tensor_kernel_vec, grid_size, BLOCK_SIZE,
+        CUDA_LAUNCH(multiply_tensor_kernel_vec, grid_size, BLOCK_SIZE,
             (float4*)out_data, 
             (const float4*)fac0_data, 
             (const float4*)fac1_data, 
@@ -547,10 +438,126 @@ void kernel_ops::multiply_tensor_tensor(void* out_data, const void* fac0_data, c
     if (remainder)
     {
         size_t offset = num_vec * 4;
-        CUDA_LAUNCH(multiply_tensor_tensor_kernel, grid_size, BLOCK_SIZE,
+        CUDA_LAUNCH(multiply_tensor_kernel, grid_size, BLOCK_SIZE,
             (float*)out_data + offset, 
             (const float*)fac0_data + offset, 
             (const float*)fac1_data + offset, 
+            remainder
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+}
+
+__global__ void subtract_from_scalar_kernel_vec(float4* out, const float4* in, float val, size_t num_vec)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_vec; i += stride)
+    {
+        float4 ov = in[i];
+
+        ov.x = val - ov.x;
+        ov.y = val - ov.y;
+        ov.z = val - ov.z;
+        ov.w = val - ov.w;
+
+        out[i] = ov;
+    }
+}
+__global__ void subtract_from_scalar_kernel(float* out, const float* in, float val, size_t num_elements)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_elements; i += stride)
+        out[i] = val - in[i];
+}
+void kernel_ops::subtract_from_scalar(void* out_data, const void* sub_data, float val, size_t num_elements)
+{
+    const int BLOCK_SIZE = 256;
+    const int grid_size = device::sm_count() * 4;
+
+    // Vectorized addition
+    size_t num_vec = num_elements / 4;
+    if (num_vec)
+    {
+        CUDA_LAUNCH(subtract_from_scalar_kernel_vec, grid_size, BLOCK_SIZE,
+            (float4*)out_data,
+            (const float4*)sub_data,
+            val,
+            num_vec
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+
+    // Remainder addition
+    size_t remainder = num_elements % 4;
+    if (remainder)
+    {
+        size_t offset = num_vec * 4;
+        CUDA_LAUNCH(subtract_from_scalar_kernel, grid_size, BLOCK_SIZE,
+            (float*)out_data + offset,
+            (const float*)sub_data + offset,
+            val,
+            remainder
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+}
+
+__global__ void divide_from_scalar_kernel_vec(float4* out, const float4* in, float val, size_t num_vec)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_vec; i += stride)
+    {
+        float4 ov = in[i];
+
+        ov.x = val / ov.x;
+        ov.y = val / ov.y;
+        ov.z = val / ov.z;
+        ov.w = val / ov.w;
+
+        out[i] = ov;
+    }
+}
+__global__ void divide_from_scalar_kernel(float* out, const float* in, float val, size_t num_elements)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_elements; i += stride)
+        out[i] = val / in[i];
+}
+void kernel_ops::divide_from_scalar(void* out_data, const void* den_data, float val, size_t num_elements)
+{
+    const int BLOCK_SIZE = 256;
+    const int grid_size = device::sm_count() * 4;
+
+    // Vectorized addition
+    size_t num_vec = num_elements / 4;
+    if (num_vec)
+    {
+        CUDA_LAUNCH(divide_from_scalar_kernel_vec, grid_size, BLOCK_SIZE,
+            (float4*)out_data,
+            (const float4*)den_data,
+            val,
+            num_vec
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+
+    // Remainder addition
+    size_t remainder = num_elements % 4;
+    if (remainder)
+    {
+        size_t offset = num_vec * 4;
+        CUDA_LAUNCH(divide_from_scalar_kernel, grid_size, BLOCK_SIZE,
+            (float*)out_data + offset,
+            (const float*)den_data + offset,
+            val,
             remainder
         );
         CUDA_CHECK(cudaGetLastError());
@@ -614,64 +621,7 @@ void kernel_ops::add_multiply_scalar_tensor(void* out_data, float val, const voi
     }
 }
 
-__global__ void subtract_tensor_kernel_vec(float4* out, const float4* sub, size_t num_vec)
-{
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    size_t stride = blockDim.x * gridDim.x;
-
-    for (size_t i = idx; i < num_vec; i += stride)
-    {
-        float4 ov = out[i];
-        float4 sv = sub[i];
-
-        ov.x -= sv.x;
-        ov.y -= sv.y;
-        ov.z -= sv.z;
-        ov.w -= sv.w;
-
-        out[i] = ov;
-    }
-}
-__global__ void subtract_tensor_kernel(float* out, const float* sub, size_t num_elements)
-{
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    size_t stride = blockDim.x * gridDim.x;
-
-    for (size_t i = idx; i < num_elements; i += stride)
-        out[i] -= sub[i];
-}
-void kernel_ops::subtract_tensor(void* out_data, const void* sub_data, size_t num_elements)
-{
-    const int BLOCK_SIZE = 256;
-    const int grid_size = device::sm_count() * 4;
-
-    // Vectorized addition
-    size_t num_vec = num_elements / 4;
-    if (num_vec)
-    {
-        CUDA_LAUNCH(subtract_tensor_kernel_vec, grid_size, BLOCK_SIZE,
-            (float4*)out_data,
-            (const float4*)sub_data,
-            num_vec
-        );
-        CUDA_CHECK(cudaGetLastError());
-    }
-
-    // Remainder addition
-    size_t remainder = num_elements % 4;
-    if (remainder)
-    {
-        size_t offset = num_vec * 4;
-        CUDA_LAUNCH(subtract_tensor_kernel, grid_size, BLOCK_SIZE,
-            (float*)out_data + offset,
-            (const float*)sub_data + offset,
-            remainder
-        );
-        CUDA_CHECK(cudaGetLastError());
-    }
-}
-
-__global__ void subtract_tensor_tensor_kernel_vec(float4* out, const float4* sum, const float4* sub, size_t num_vec)
+__global__ void subtract_tensor_kernel_vec(float4* out, const float4* sum, const float4* sub, size_t num_vec)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = blockDim.x * gridDim.x;
@@ -690,7 +640,7 @@ __global__ void subtract_tensor_tensor_kernel_vec(float4* out, const float4* sum
         out[i] = ov;
     }
 }
-__global__ void subtract_tensor_tensor_kernel(float* out, const float* sum, const float* sub, size_t num_elements)
+__global__ void subtract_tensor_kernel(float* out, const float* sum, const float* sub, size_t num_elements)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = blockDim.x * gridDim.x;
@@ -698,7 +648,7 @@ __global__ void subtract_tensor_tensor_kernel(float* out, const float* sum, cons
     for (size_t i = idx; i < num_elements; i += stride)
         out[i] = sum[i] - sub[i];
 }
-void kernel_ops::subtract_tensor_tensor(void* out_data, const void* sum_data, const void* sub_data, size_t num_elements)
+void kernel_ops::subtract_tensor(void* out_data, const void* sum_data, const void* sub_data, size_t num_elements)
 {
     const int BLOCK_SIZE = 256;
     const int grid_size = device::sm_count() * 4;
@@ -707,7 +657,7 @@ void kernel_ops::subtract_tensor_tensor(void* out_data, const void* sum_data, co
     size_t num_vec = num_elements / 4;
     if (num_vec)
     {
-        CUDA_LAUNCH(subtract_tensor_tensor_kernel_vec, grid_size, BLOCK_SIZE,
+        CUDA_LAUNCH(subtract_tensor_kernel_vec, grid_size, BLOCK_SIZE,
             (float4*)out_data, 
             (const float4*)sum_data, 
             (const float4*)sub_data, 
@@ -721,7 +671,7 @@ void kernel_ops::subtract_tensor_tensor(void* out_data, const void* sum_data, co
     if (remainder)
     {
         size_t offset = num_vec * 4;
-        CUDA_LAUNCH(subtract_tensor_tensor_kernel, grid_size, BLOCK_SIZE,
+        CUDA_LAUNCH(subtract_tensor_kernel, grid_size, BLOCK_SIZE,
             (float*)out_data + offset, 
             (const float*)sum_data + offset, 
             (const float*)sub_data + offset, 
@@ -731,64 +681,7 @@ void kernel_ops::subtract_tensor_tensor(void* out_data, const void* sum_data, co
     }
 }
 
-__global__ void divide_tensor_kernel_vec(float4* out, const float4* den, size_t num_vec)
-{
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    size_t stride = blockDim.x * gridDim.x;
-
-    for (size_t i = idx; i < num_vec; i += stride)
-    {
-        float4 ov = out[i];
-        float4 sv = den[i];
-
-        ov.x /= sv.x;
-        ov.y /= sv.y;
-        ov.z /= sv.z;
-        ov.w /= sv.w;
-
-        out[i] = ov;
-    }
-}
-__global__ void divide_tensor_kernel(float* out, const float* den, size_t num_elements)
-{
-    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    size_t stride = blockDim.x * gridDim.x;
-
-    for (size_t i = idx; i < num_elements; i += stride)
-        out[i] /= den[i];
-}
-void kernel_ops::divide_tensor(void* out_data, const void* den_data, size_t num_elements)
-{
-    const int BLOCK_SIZE = 256;
-    const int grid_size = device::sm_count() * 4;
-
-    // Vectorized addition
-    size_t num_vec = num_elements / 4;
-    if (num_vec)
-    {
-        CUDA_LAUNCH(divide_tensor_kernel_vec, grid_size, BLOCK_SIZE,
-            (float4*)out_data,
-            (const float4*)den_data,
-            num_vec
-        );
-        CUDA_CHECK(cudaGetLastError());
-    }
-
-    // Remainder addition
-    size_t remainder = num_elements % 4;
-    if (remainder)
-    {
-        size_t offset = num_vec * 4;
-        CUDA_LAUNCH(divide_tensor_kernel, grid_size, BLOCK_SIZE,
-            (float*)out_data + offset,
-            (const float*)den_data + offset,
-            remainder
-        );
-        CUDA_CHECK(cudaGetLastError());
-    }
-}
-
-__global__ void divide_tensor_tensor_kernel_vec(float4* out, const float4* num, const float4* den, size_t num_vec)
+__global__ void divide_tensor_kernel_vec(float4* out, const float4* num, const float4* den, size_t num_vec)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = blockDim.x * gridDim.x;
@@ -807,7 +700,7 @@ __global__ void divide_tensor_tensor_kernel_vec(float4* out, const float4* num, 
         out[i] = ov;
     }
 }
-__global__ void divide_tensor_tensor_kernel(float* out, const float* num, const float* den, size_t num_elements)
+__global__ void divide_tensor_kernel(float* out, const float* num, const float* den, size_t num_elements)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = blockDim.x * gridDim.x;
@@ -815,7 +708,7 @@ __global__ void divide_tensor_tensor_kernel(float* out, const float* num, const 
     for (size_t i = idx; i < num_elements; i += stride)
         out[i] = num[i] / den[i];
 }
-void kernel_ops::divide_tensor_tensor(void* out_data, const void* num_data, const void* den_data, size_t num_elements)
+void kernel_ops::divide_tensor(void* out_data, const void* num_data, const void* den_data, size_t num_elements)
 {
     const int BLOCK_SIZE = 256;
     const int grid_size = device::sm_count() * 4;
@@ -824,7 +717,7 @@ void kernel_ops::divide_tensor_tensor(void* out_data, const void* num_data, cons
     size_t num_vec = num_elements / 4;
     if (num_vec)
     {
-        CUDA_LAUNCH(divide_tensor_tensor_kernel_vec, grid_size, BLOCK_SIZE,
+        CUDA_LAUNCH(divide_tensor_kernel_vec, grid_size, BLOCK_SIZE,
             (float4*)out_data, 
             (const float4*)num_data, 
             (const float4*)den_data, 
@@ -838,7 +731,7 @@ void kernel_ops::divide_tensor_tensor(void* out_data, const void* num_data, cons
     if (remainder)
     {
         size_t offset = num_vec * 4;
-        CUDA_LAUNCH(divide_tensor_tensor_kernel, grid_size, BLOCK_SIZE,
+        CUDA_LAUNCH(divide_tensor_kernel, grid_size, BLOCK_SIZE,
             (float*)out_data + offset, 
             (const float*)num_data + offset, 
             (const float*)den_data + offset, 
@@ -1520,8 +1413,37 @@ void kernel_ops::normal(void* data_ptr, float mean, float std, size_t num_elemen
 void kernel_ops::uniform(void* data_ptr, float min, float max, size_t num_elements)
 {
     curandGenerateUniform(rng::generator(), (float*)data_ptr, num_elements);
-    multiply_scalar(data_ptr, max - min, num_elements);
-    add_scalar(data_ptr, min, num_elements);
+    multiply_scalar(data_ptr, data_ptr, max - min, num_elements);
+    add_scalar(data_ptr, data_ptr, min, num_elements);
+}
+
+void kernel_ops::shuffle(void* values, size_t length)
+{
+    // Allocate some space for the keys.
+    unsigned* d_keys = (unsigned*)MemPool::allocate(length * sizeof(unsigned));
+    // Randomly generate those keys with our generator.
+    CURAND_CHECK(curandGenerate(rng::generator(), d_keys, length));
+    // Sort values given the randomly obtained keys.
+    thrust::sort_by_key(thrust::cuda::par.on(stream::get()), d_keys,d_keys + length, (int*)values);
+    // Cleanup.
+    MemPool::free(d_keys);
+}
+
+__global__ void fast_arange_kernel(int* data, int a, int stride, size_t count)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t block_stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < count; i += block_stride)
+        data[i] = a + i * stride;
+}
+void kernel_ops::arange(void* data_ptr, int a, int stride, size_t count)
+{
+    const int BLOCK_SIZE = 256;
+    const int grid_size = device::sm_count() * 4;
+
+    CUDA_LAUNCH(fast_arange_kernel, grid_size, BLOCK_SIZE, (int*)data_ptr, a, stride, count);
+    CUDA_CHECK(cudaGetLastError());
 }
 
 /*
@@ -2702,7 +2624,68 @@ public:
     }
 };
 
-void kernel_ops::matmul(void* out_data, const void* A_data, const void* B_data, const Shape& A_shape, const Shape& B_shape)
+struct ShapeDesc
+{
+    static constexpr int MAX_DIMS = 32;
+
+    size_t sizes[MAX_DIMS];
+    size_t stride[MAX_DIMS];
+    size_t num_dims;
+    size_t numel;
+};
+__global__ void write_to_ptr_array(void** __restrict__ array, float* data_ptr, ShapeDesc desc)
+{
+    // Compute total threads for offset.
+    size_t offset = blockDim.x * gridDim.x;
+
+    // Run until no elements left.
+    for (size_t idx = threadIdx.x + blockDim.x * blockIdx.x; idx < desc.numel; idx += offset)
+    {
+        size_t data_offset = 0;
+        size_t div_idx = idx;
+
+        // Compute the data offset based on sizes and strides.
+        #pragma unroll
+        for (int dim = desc.num_dims - 1; dim >= 0; dim--)
+        {
+            data_offset += (div_idx % desc.sizes[dim]) * desc.stride[dim];
+            div_idx /= desc.sizes[dim];
+        }
+
+        // Set the array pointer value.
+        array[idx] = data_ptr + data_offset;
+    }
+}
+static inline void** generate_ptr_array(const void* data_ptr, const Shape& out_shape, const Shape& in_shape)
+{
+    const int BLOCK_SIZE = 256;
+    const int grid_size = device::sm_count() * 4;
+
+    ShapeDesc desc = {};
+    desc.num_dims = out_shape.dim() - 2;
+    desc.numel = 1u;
+
+    size_t stride = in_shape[-1] * in_shape[-2];
+    for (int dim = out_shape.dim() - 3; dim >= 0; dim--)
+    {
+        desc.sizes[dim] = out_shape[dim];
+        desc.stride[dim] = (in_shape[dim] != 1) ? stride : 0;
+
+        stride *= in_shape[dim];
+        desc.numel *= out_shape[dim];
+    }
+
+    void** ptr_array = (void**)MemPool::allocate(desc.numel * sizeof(void*));
+
+    CUDA_LAUNCH(write_to_ptr_array, grid_size, BLOCK_SIZE,
+        ptr_array, (float*)data_ptr, desc
+    );
+    CUDA_CHECK(cudaGetLastError());
+
+    return ptr_array;
+}
+
+void kernel_ops::matmul(void* out_data, const void* A_data, const void* B_data, const Shape& out_shape, const Shape& A_shape, const Shape& B_shape)
 {
     constexpr size_t storage_size = 0x1000ull;
     constexpr size_t mask = storage_size - 1;
@@ -2717,6 +2700,7 @@ void kernel_ops::matmul(void* out_data, const void* A_data, const void* B_data, 
         cublasLtMatrixLayout_t aLayout = nullptr;
         cublasLtMatrixLayout_t bLayout = nullptr;
         cublasLtMatrixLayout_t cLayout = nullptr;
+        bool ptr_array = false;
         size_t key = 0u;
     }
     static thread_local storage[storage_size] = {};
@@ -2770,10 +2754,10 @@ void kernel_ops::matmul(void* out_data, const void* A_data, const void* B_data, 
             
             // Different possible layout cases to consider.
             bool b_batched = true;
-            bool arbitrary = false;
+            data.ptr_array = false;
 
             // Integer to store the batch size.
-            int batch_count = 1u;
+            int32_t batch_count = 1u;
 
             // Find out which case we are dealing with.
             for (unsigned i = 0; i < A_shape.dim() - 2; i++)
@@ -2782,7 +2766,7 @@ void kernel_ops::matmul(void* out_data, const void* A_data, const void* B_data, 
                 batch_count *= (a > b) ? a : b;
 
                 if (a > b) b_batched = false;
-                if (b > a || (!b_batched && b != 1)) arbitrary = true;
+                if (b > a || (!b_batched && b != 1)) data.ptr_array = true;
             }
 
             // Extract matrix dimensions.
@@ -2797,9 +2781,23 @@ void kernel_ops::matmul(void* out_data, const void* A_data, const void* B_data, 
             CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&data.aLayout, CUDA_R_32F, K, M, K));
             CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&data.bLayout, CUDA_R_32F, N, K, N));
             CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&data.cLayout, CUDA_R_32F, N, M, N));
+            
+            // If it needs a pointer array set the mode and batch size, every call you'll generate the array.
+            if (data.ptr_array)
+            {
+                cublasLtBatchMode_t batch_mode = CUBLASLT_BATCH_MODE_POINTER_ARRAY;
 
+                CUBLAS_CHECK(cublasLtMatrixLayoutSetAttribute(data.aLayout, CUBLASLT_MATRIX_LAYOUT_BATCH_MODE, &batch_mode, sizeof(batch_mode)));
+                CUBLAS_CHECK(cublasLtMatrixLayoutSetAttribute(data.aLayout, CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT, &batch_count, sizeof(batch_count)));
+
+                CUBLAS_CHECK(cublasLtMatrixLayoutSetAttribute(data.bLayout, CUBLASLT_MATRIX_LAYOUT_BATCH_MODE, &batch_mode, sizeof(batch_mode)));
+                CUBLAS_CHECK(cublasLtMatrixLayoutSetAttribute(data.bLayout, CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT, &batch_count, sizeof(batch_count)));
+
+                CUBLAS_CHECK(cublasLtMatrixLayoutSetAttribute(data.cLayout, CUBLASLT_MATRIX_LAYOUT_BATCH_MODE, &batch_mode, sizeof(batch_mode)));
+                CUBLAS_CHECK(cublasLtMatrixLayoutSetAttribute(data.cLayout, CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT, &batch_count, sizeof(batch_count)));
+            }
             // If it is batched set the batch mode.
-            if (batch_count > 1)
+            else if (batch_count > 1)
             {
                 int64_t strideB = (b_batched) ? K * N : 0ull;
                 int64_t strideA = M * K;
@@ -2819,10 +2817,6 @@ void kernel_ops::matmul(void* out_data, const void* A_data, const void* B_data, 
                 CUBLAS_CHECK(cublasLtMatrixLayoutSetAttribute(data.cLayout, CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT, &batch_count, sizeof(batch_count)));
                 CUBLAS_CHECK(cublasLtMatrixLayoutSetAttribute(data.cLayout, CUBLASLT_MATRIX_LAYOUT_STRIDED_BATCH_OFFSET, &strideC, sizeof(strideC)));
             }
-            if (arbitrary)
-            {
-                TENSOR_ERROR("Arbitrarily sized batch GEMMs not yet implemented.");
-            }
 
             // Heuristic algo selection
             cublasLtMatmulHeuristicResult_t heur = {};
@@ -2840,24 +2834,54 @@ void kernel_ops::matmul(void* out_data, const void* A_data, const void* B_data, 
     // Load data from bank.
     GEMM_data& data = gemm_data_bank::get_data(A_shape, B_shape);
 
-    // Execute cuBLAS Lt matmul.
-    CUBLAS_CHECK(cublasLtMatmul(
-        cublas::handle(),
-        data.opDesc,
-        &alpha,
-        B_data, data.bLayout,
-        A_data, data.aLayout,
-        &beta,
-        out_data, data.cLayout,
-        out_data, data.cLayout,
-        &data.algorithm,
-        cublas::workspace(), 
-        cublas::workspace_size,
-        stream::get()
-    ));
+    // If the offsets are arbitrary generate a pointer array and set it.
+    if (data.ptr_array)
+    {
+        void** a_ptr_array = generate_ptr_array(A_data, out_shape, A_shape);
+        void** b_ptr_array = generate_ptr_array(B_data, out_shape, B_shape);
+        void** c_ptr_array = generate_ptr_array(out_data, out_shape, out_shape);
+
+        // Execute cuBLAS Lt matmul.
+        CUBLAS_CHECK(cublasLtMatmul(
+            cublas::handle(),
+            data.opDesc,
+            &alpha,
+            b_ptr_array, data.bLayout,
+            a_ptr_array, data.aLayout,
+            &beta,
+            c_ptr_array, data.cLayout,
+            c_ptr_array, data.cLayout,
+            &data.algorithm,
+            cublas::workspace(),
+            cublas::workspace_size,
+            stream::get()
+        ));
+
+        MemPool::free(a_ptr_array);
+        MemPool::free(b_ptr_array);
+        MemPool::free(c_ptr_array);
+    }
+    else
+    {
+        // Execute cuBLAS Lt matmul.
+        CUBLAS_CHECK(cublasLtMatmul(
+            cublas::handle(),
+            data.opDesc,
+            &alpha,
+            B_data, data.bLayout,
+            A_data, data.aLayout,
+            &beta,
+            out_data, data.cLayout,
+            out_data, data.cLayout,
+            &data.algorithm,
+            cublas::workspace(), 
+            cublas::workspace_size,
+            stream::get()
+        ));
+    }
 }
 
-void kernel_ops::matmul_bias(void* out_data, const void* A_data, const void* B_data, const void* bias, const Shape& A_shape, const Shape& B_shape, const Shape& bias_shape)
+void kernel_ops::matmul_bias(void* out_data, const void* A_data, const void* B_data, const void* bias, const Shape& out_shape, const Shape& A_shape, const Shape& B_shape, const Shape& bias_shape)
 {
     constexpr size_t storage_size = 0x1000ull;
     constexpr size_t mask = storage_size - 1;
@@ -2872,8 +2896,9 @@ void kernel_ops::matmul_bias(void* out_data, const void* A_data, const void* B_d
         cublasLtMatrixLayout_t aLayout = nullptr;
         cublasLtMatrixLayout_t bLayout = nullptr;
         cublasLtMatrixLayout_t cLayout = nullptr;
-        size_t key = 0u;
         bool bias_fused = false;
+        bool ptr_array = false;
+        size_t key = 0u;
     }
     static thread_local storage[storage_size] = {};
     
@@ -2930,11 +2955,11 @@ void kernel_ops::matmul_bias(void* out_data, const void* A_data, const void* B_d
             // Different possible layout cases to consider.
             bool B_batched = true;
             bool b_batched = true;
-            bool arbitrary = false;
+            data.ptr_array = false;
             data.bias_fused = true;
 
             // Integer to store the batch size.
-            int batch_count = 1u;
+            int32_t batch_count = 1u;
 
             // Find out which case we are dealing with.
             for (unsigned i = 0; i < A_shape.dim() - 2; i++)
@@ -2946,18 +2971,19 @@ void kernel_ops::matmul_bias(void* out_data, const void* A_data, const void* B_d
 
                 if (A > B) B_batched = false;
                 if (A > b) b_batched = false;
-                if (B > A || (!B_batched && B != 1)) arbitrary = true;
+                if (B > A || (!B_batched && B != 1)) data.ptr_array = true;
                 if (!b_batched && b != 1) data.bias_fused = false;
             }
-
-            // Last check for fused bias. make sure is (1,N) case.
-            if (bias_shape[-1] == 1 || bias_shape[-2] != 1)
-                data.bias_fused = false;
 
             // Extract matrix dimensions.
             int64_t M = A_shape[-2];
             int64_t N = B_shape[-1];
             int64_t K = A_shape[-1];
+
+            // Last check for fused bias. make sure is (1,N) case.
+            // Also cuBLAS does not support fused bias for pointer array mode.
+            if (bias_shape[-1] != N || bias_shape[-2] != 1 || data.ptr_array)
+                data.bias_fused = false;
 
             // Create a matmul descriptor.
             CUBLAS_CHECK(cublasLtMatmulDescCreate(&data.opDesc, CUBLAS_COMPUTE_32F, CUDA_R_32F));
@@ -2967,14 +2993,24 @@ void kernel_ops::matmul_bias(void* out_data, const void* A_data, const void* B_d
             CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&data.bLayout, CUDA_R_32F, N, K, N));
             CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&data.cLayout, CUDA_R_32F, N, M, N));
 
-            if (arbitrary)
+            // If it needs a pointer array set the mode and batch size, every call you'll generate the array.
+            if (data.ptr_array)
             {
-                TENSOR_ERROR("Arbitrarily sized batch GEMMs not yet implemented.");
+                cublasLtBatchMode_t batch_mode = CUBLASLT_BATCH_MODE_POINTER_ARRAY;
+
+                CUBLAS_CHECK(cublasLtMatrixLayoutSetAttribute(data.aLayout, CUBLASLT_MATRIX_LAYOUT_BATCH_MODE, &batch_mode, sizeof(batch_mode)));
+                CUBLAS_CHECK(cublasLtMatrixLayoutSetAttribute(data.aLayout, CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT, &batch_count, sizeof(batch_count)));
+
+                CUBLAS_CHECK(cublasLtMatrixLayoutSetAttribute(data.bLayout, CUBLASLT_MATRIX_LAYOUT_BATCH_MODE, &batch_mode, sizeof(batch_mode)));
+                CUBLAS_CHECK(cublasLtMatrixLayoutSetAttribute(data.bLayout, CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT, &batch_count, sizeof(batch_count)));
+
+                CUBLAS_CHECK(cublasLtMatrixLayoutSetAttribute(data.cLayout, CUBLASLT_MATRIX_LAYOUT_BATCH_MODE, &batch_mode, sizeof(batch_mode)));
+                CUBLAS_CHECK(cublasLtMatrixLayoutSetAttribute(data.cLayout, CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT, &batch_count, sizeof(batch_count)));
             }
-            // If batched add the batches.
+            // If it is batched set the batch mode.
             else if (batch_count > 1)
             {
-                int64_t strideB = (B_batched) ? K * N : 0;
+                int64_t strideB = (B_batched) ? K * N : 0ull;
                 int64_t strideA = M * K;
                 int64_t strideC = M * N;
 
@@ -3018,29 +3054,58 @@ void kernel_ops::matmul_bias(void* out_data, const void* A_data, const void* B_d
     // Load data from bank.
     GEMM_B_data& data = gemm_b_data_bank::get_data(A_shape, B_shape, bias_shape);
 
+    // Set your bias pointer for cuBLAS fused bias.
     if (data.bias_fused)
         CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(data.opDesc, CUBLASLT_MATMUL_DESC_BIAS_POINTER, &bias, sizeof(bias)));
 
-    // Execute cuBLAS Lt matmul.
-    CUBLAS_CHECK(cublasLtMatmul(
-        cublas::handle(),
-        data.opDesc,
-        &alpha,
-        B_data, data.bLayout,
-        A_data, data.aLayout,
-        &beta,
-        out_data, data.cLayout,
-        out_data, data.cLayout,
-        &data.algorithm,
-        cublas::workspace(), 
-        cublas::workspace_size,
-        stream::get()
-    ));
+    // If the offsets are arbitrary generate a pointer array and set it.
+    if (data.ptr_array)
+    {
+        void** a_ptr_array = generate_ptr_array(A_data, out_shape, A_shape);
+        void** b_ptr_array = generate_ptr_array(B_data, out_shape, B_shape);
+        void** c_ptr_array = generate_ptr_array(out_data, out_shape, out_shape);
+
+        // Execute cuBLAS Lt matmul.
+        CUBLAS_CHECK(cublasLtMatmul(
+            cublas::handle(),
+            data.opDesc,
+            &alpha,
+            b_ptr_array, data.bLayout,
+            a_ptr_array, data.aLayout,
+            &beta,
+            c_ptr_array, data.cLayout,
+            c_ptr_array, data.cLayout,
+            &data.algorithm,
+            cublas::workspace(),
+            cublas::workspace_size,
+            stream::get()
+        ));
+
+        MemPool::free(a_ptr_array);
+        MemPool::free(b_ptr_array);
+        MemPool::free(c_ptr_array);
+    }
+    else
+    {
+        // Execute cuBLAS Lt matmul.
+        CUBLAS_CHECK(cublasLtMatmul(
+            cublas::handle(),
+            data.opDesc,
+            &alpha,
+            B_data, data.bLayout,
+            A_data, data.aLayout,
+            &beta,
+            out_data, data.cLayout,
+            out_data, data.cLayout,
+            &data.algorithm,
+            cublas::workspace(),
+            cublas::workspace_size,
+            stream::get()
+        ));
+    }
 
     if (!data.bias_fused)
-    {
-        TENSOR_ERROR("Matmul fallback without fused bias not implemented yet.");
-    }
+        shaped_add(out_data, out_data, bias, out_shape, bias_shape);
 }
 
 void kernel_ops::cat(void* out_data, const void* in0_data, const void* in1_data, size_t inner_size, size_t outer_size, int size0, int size1)
@@ -3154,4 +3219,931 @@ void kernel_ops::causal_mast(void* out_data, int L)
 
     CUDA_LAUNCH(causal_mask_kernel, L, BLOCK, (float*)out_data, L);
     CUDA_CHECK(cudaGetLastError());
+}
+
+/*
+--------------------------------------------------------------------------------------------------------------------------
+ Regular Operators
+--------------------------------------------------------------------------------------------------------------------------
+*/
+
+// Just to not repeat to much code and have all here if anything needs change.
+struct RegularOpDescriptor
+{
+    enum
+    {
+        SAME_SHAPE,
+        BROADCAST,
+        SQUEEZE,
+        ARBITRARY
+    } type = SAME_SHAPE;
+
+    size_t num_in = 1;
+    size_t num_out = 1;
+    ShapeDesc shape_desc = {};
+    bool arbitrary_can_vect = false;
+    void* temp = nullptr;
+};
+static inline RegularOpDescriptor analize_op_case(const void* in1_data, const Shape& out_shape, const Shape& in_shape)
+{
+    RegularOpDescriptor desc = {};
+
+    bool same_shape = true;
+    bool can_broadcast = true;
+    bool broadcasting = true;
+    bool can_squeeze = true;
+    bool squeezing = true;
+
+    for (unsigned dim = 0; dim < out_shape.dim(); dim++)
+    {
+        int i = in_shape[dim]; desc.num_in *= i;
+        int o = out_shape[dim]; desc.num_out *= o;
+
+        if (o > i)
+        {
+            same_shape = false;
+            can_squeeze = false;
+            if (!broadcasting) can_broadcast = false;
+        }
+        if (o < i)
+        {
+            same_shape = false;
+            can_broadcast = false;
+            if (!squeezing) can_squeeze = false;
+        }
+        if (o == i && o != 1)
+        {
+            broadcasting = false;
+            squeezing = false;
+        }
+    }
+    if (same_shape) 
+        desc.type = RegularOpDescriptor::SAME_SHAPE;
+
+    else if (can_broadcast)
+        desc.type = RegularOpDescriptor::BROADCAST;
+
+    else if (can_squeeze)
+        desc.type = RegularOpDescriptor::SQUEEZE;
+    
+    else
+    {
+        desc.type = RegularOpDescriptor::ARBITRARY;
+
+        Shape in = in_shape;
+        Shape out = out_shape;
+
+        // First fuse shapes as much as possible.
+        for (unsigned dim = 0; dim < in.dim() - 1;)
+        {
+            if (in[dim] == 1 && out[dim] == 1)
+            {
+                in.remove(dim);
+                out.remove(dim);
+            }
+            else if (in[dim] == out[dim] && in[dim + 1] == out[dim + 1])
+            {
+                in[dim] *= in[dim + 1];
+                out[dim] *= in[dim + 1];
+                in.remove(dim + 1);
+                out.remove(dim + 1);
+            }
+            else if (in[dim] > out[dim] && in[dim + 1] > out[dim + 1])
+            {
+                in[dim] *= in[dim + 1];
+                in.remove(dim + 1);
+                out.remove(dim + 1);
+            }
+            else if (in[dim] < out[dim] && in[dim + 1] < out[dim + 1])
+            {
+                out[dim] *= out[dim + 1];
+                in.remove(dim + 1);
+                out.remove(dim + 1);
+            }
+            else dim++;
+        }
+
+        // Compute strides.
+        Shape stride_in(in.dim(), (int*)nullptr); stride_in[-1] = 1;
+        Shape stride_out(out.dim(), (int*)nullptr); stride_out[-1] = 1;
+
+        for (int d = in.dim() - 2; d >= 0; d--)
+        {
+            stride_in[d] = in[d + 1] * stride_in[d + 1];
+            stride_out[d] = out[d + 1] * stride_out[d + 1];
+        }
+
+        // Then sum accross dimensions if necessary.
+        for (unsigned dim = 0; dim < in.dim(); dim++)
+            if (in[dim] > out[dim])
+            {
+                // Allocate space to write the sum.
+                void* temp_out = MemPool::allocate(sizeof(float) * desc.num_in / in[dim]);
+
+                // Sum accross dim. outer size is "numel_in / (fused_in[dim] * stride_in[dim])" inner size is "stride_in[dim]"
+                kernel_ops::sum(temp_out, desc.temp ? desc.temp : in1_data, stride_in[dim], in[dim], (int)desc.num_in / in[dim]);
+
+                // Make in data smaller.
+                // No need to adjust for shape mods given previous conditions.
+                desc.num_in /= in[dim];
+                for (unsigned i = 0; i < dim; i++)
+                    stride_in[i] /= in[dim];
+                in.remove(dim);
+                out.remove(dim);
+                stride_in.remove(dim);
+                stride_out.remove(dim);
+
+                // Store new temporary data.
+                if (desc.temp) MemPool::free(desc.temp);
+                desc.temp = temp_out;
+            }
+
+        // Create a shape descriptor.
+        desc.shape_desc.num_dims = in.dim();
+        desc.shape_desc.numel = desc.num_out;
+
+        for (unsigned dim = 0; dim < out.dim(); dim++)
+        {
+            desc.shape_desc.sizes[dim] = out[dim];
+            desc.shape_desc.stride[dim] = (in[dim] != 1) ? stride_in[dim] : 0;
+        }
+        desc.arbitrary_can_vect = (in[-1] % 4 == 0);
+    }
+    return desc;
+}
+
+__global__ void broadcast_shaped_add_kernel_vec(float4* out_data, const float4* in0_data, const float4* __restrict__ in1_data, ShapeDesc desc)
+{
+    // Compute total threads for offset.
+    size_t offset = blockDim.x * gridDim.x;
+
+    // Run until no elements left.
+    for (size_t idx = threadIdx.x + blockDim.x * blockIdx.x; idx < desc.numel; idx += offset)
+    {
+        size_t data_offset = 0;
+        size_t div_idx = idx;
+
+        // Compute the address for in1_data based on sizes and strides.
+        #pragma unroll
+        for (int dim = desc.num_dims - 1; dim >= 0; dim--)
+        {
+            data_offset += (div_idx % desc.sizes[dim]) * desc.stride[dim];
+            div_idx /= desc.sizes[dim];
+        }
+
+        // Sum the two values.
+        float4 v0 = in0_data[idx];
+        float4 v1 = in1_data[data_offset];
+
+        v0.x = v0.x + v1.x;
+        v0.y = v0.y + v1.y;
+        v0.z = v0.z + v1.z;
+        v0.w = v0.w + v1.w;
+
+        out_data[idx] = v0;
+    }
+}
+__global__ void broadcast_shaped_add_kernel(float* out_data, const float* in0_data, const float* __restrict__ in1_data, ShapeDesc desc)
+{
+    // Compute total threads for offset.
+    size_t offset = blockDim.x * gridDim.x;
+
+    // Run until no elements left.
+    for (size_t idx = threadIdx.x + blockDim.x * blockIdx.x; idx < desc.numel; idx += offset)
+    {
+        size_t data_offset = 0;
+        size_t div_idx = idx;
+
+        // Compute the address for in1_data based on sizes and strides.
+        #pragma unroll
+        for (int dim = desc.num_dims - 1; dim >= 0; dim--)
+        {
+            data_offset += (div_idx % desc.sizes[dim]) * desc.stride[dim];
+            div_idx /= desc.sizes[dim];
+        }
+
+        // Sum the two values.
+        out_data[idx] = in0_data[idx] + in1_data[data_offset];
+    }
+}
+__global__ void broadcast_add_kernel_vec(float4* out_data, const float4* in0_data, const float4* in1_data, size_t inner_stride_vec, size_t num_vec)
+{
+    // Compute total threads for offset.
+    size_t offset = blockDim.x * gridDim.x;
+
+    // Run until no elements left.
+    for (size_t idx = threadIdx.x + blockDim.x * blockIdx.x; idx < num_vec; idx += offset)
+    {
+        float4 v0 = in0_data[idx];
+        float4 v1 = in1_data[idx % inner_stride_vec];
+
+        v0.x = v0.x + v1.x;
+        v0.y = v0.y + v1.y;
+        v0.z = v0.z + v1.z;
+        v0.w = v0.w + v1.w;
+
+        out_data[idx] = v0;
+    }
+}
+__global__ void broadcast_add_kernel(float* out_data, const float* in0_data, const float* in1_data, size_t inner_stride, size_t num_elements)
+{
+    // Compute total threads for offset.
+    size_t offset = blockDim.x * gridDim.x;
+
+    // Run until no elements left.
+    for (size_t idx = threadIdx.x + blockDim.x * blockIdx.x; idx < num_elements; idx += offset)
+        out_data[idx] = in0_data[idx] + in1_data[idx % inner_stride];
+}
+template<int BLOCK>
+__global__ void squeeze_add_dim(float* __restrict__ out, const float* __restrict__ in, size_t reduce_stride, size_t reduce_count)
+{
+    int j = blockIdx.x;
+    const float* base = in + j;
+
+    float sum = 0.0f;
+    for (int k = threadIdx.x; k < reduce_count; k += BLOCK)
+        sum += base[k * reduce_stride];
+
+    sum = block_sum<BLOCK>(sum);
+    if (threadIdx.x == 0)
+        out[j] += sum;
+}
+void kernel_ops::shaped_add(void* out_data, const void* in0_data, const void* in1_data, const Shape& in0_shape, const Shape& in1_shape)
+{
+    constexpr int BLOCK = 256;
+    const int grid_size = device::sm_count() * 4;
+
+    RegularOpDescriptor desc = analize_op_case(in1_data, in0_shape, in1_shape);
+
+    switch (desc.type)
+    {
+    // If they have the same shape use the fast kernel.
+    case RegularOpDescriptor::SAME_SHAPE:
+    {
+        kernel_ops::add_tensor(out_data, in0_data, in1_data, desc.num_out);
+        break;
+    }
+    // If in1 naturally broadcasts to out use broadcasting kernel. 
+    case RegularOpDescriptor::BROADCAST:
+    {
+        // If can vectorize use vectorized kernel.
+        if (desc.num_in % 4 == 0)
+        {
+            CUDA_LAUNCH(broadcast_add_kernel_vec, grid_size, BLOCK,
+                (float4*)out_data,
+                (const float4*)in0_data,
+                (const float4*)in1_data,
+                desc.num_in / 4,
+                desc.num_out / 4
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+        // Else use element-wise kernel.
+        else
+        {
+            CUDA_LAUNCH(broadcast_add_kernel, grid_size, BLOCK,
+                (float*)out_data,
+                (const float*)in0_data,
+                (const float*)in1_data,
+                desc.num_in,
+                desc.num_out
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+        break;
+    }
+    // If in1 naturally squeezes to out use squeezing kernel.
+    case RegularOpDescriptor::SQUEEZE:
+    {
+        // First copy input 0 to output.
+        cuda::copy_gpu_to_gpu(out_data, in0_data, desc.num_out * sizeof(float));
+
+        // Then run summation addition kernel.
+        CUDA_LAUNCH(squeeze_add_dim<BLOCK>, (unsigned)desc.num_out, BLOCK,
+            (float*)out_data,
+            (const float*)in1_data,
+            desc.num_out,
+            desc.num_in / desc.num_out
+        );
+        CUDA_CHECK(cudaGetLastError());
+        break;
+    }
+    // If arbitrary broadcasting use slow path.
+    case RegularOpDescriptor::ARBITRARY:
+    {
+        // Launch shaped kernel.
+        // Vectorized if possible. 
+        if (desc.arbitrary_can_vect)
+        {
+            desc.shape_desc.numel /= 4;
+            desc.shape_desc.sizes[desc.shape_desc.num_dims - 1] /= 4;
+            for (unsigned i = 0; i < desc.shape_desc.num_dims - 1; i++)
+                desc.shape_desc.stride[i] /= 4;
+
+            CUDA_LAUNCH(broadcast_shaped_add_kernel_vec, grid_size, BLOCK,
+                (float4*)out_data,
+                (const float4*)in0_data,
+                desc.temp ? (const float4*)desc.temp : (const float4*)in1_data,
+                desc.shape_desc
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+        // Else element wise.
+        else
+        {
+            CUDA_LAUNCH(broadcast_shaped_add_kernel, grid_size, BLOCK,
+                (float*)out_data,
+                (const float*)in0_data,
+                desc.temp ? (const float*)desc.temp : (const float*)in1_data,
+                desc.shape_desc
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+        // Free temporary data.
+        if (desc.temp) MemPool::free(desc.temp);
+        break;
+    }
+    }
+}
+
+__global__ void broadcast_shaped_subtract_kernel_vec(float4* out_data, const float4* in0_data, const float4* __restrict__ in1_data, ShapeDesc desc)
+{
+    // Compute total threads for offset.
+    size_t offset = blockDim.x * gridDim.x;
+
+    // Run until no elements left.
+    for (size_t idx = threadIdx.x + blockDim.x * blockIdx.x; idx < desc.numel; idx += offset)
+    {
+        size_t data_offset = 0;
+        size_t div_idx = idx;
+
+        // Compute the address for in1_data based on sizes and strides.
+        #pragma unroll
+        for (int dim = desc.num_dims - 1; dim >= 0; dim--)
+        {
+            data_offset += (div_idx % desc.sizes[dim]) * desc.stride[dim];
+            div_idx /= desc.sizes[dim];
+        }
+
+        // Subtract the two values.
+        float4 v0 = in0_data[idx];
+        float4 v1 = in1_data[data_offset];
+
+        v0.x = v0.x - v1.x;
+        v0.y = v0.y - v1.y;
+        v0.z = v0.z - v1.z;
+        v0.w = v0.w - v1.w;
+
+        out_data[idx] = v0;
+    }
+}
+__global__ void broadcast_shaped_subtract_kernel(float* out_data, const float* in0_data, const float* __restrict__ in1_data, ShapeDesc desc)
+{
+    // Compute total threads for offset.
+    size_t offset = blockDim.x * gridDim.x;
+
+    // Run until no elements left.
+    for (size_t idx = threadIdx.x + blockDim.x * blockIdx.x; idx < desc.numel; idx += offset)
+    {
+        size_t data_offset = 0;
+        size_t div_idx = idx;
+
+        // Compute the address for in1_data based on sizes and strides.
+        #pragma unroll
+        for (int dim = desc.num_dims - 1; dim >= 0; dim--)
+        {
+            data_offset += (div_idx % desc.sizes[dim]) * desc.stride[dim];
+            div_idx /= desc.sizes[dim];
+        }
+
+        // Subtract the two values.
+        out_data[idx] = in0_data[idx] - in1_data[data_offset];
+    }
+}
+__global__ void broadcast_subtract_kernel_vec(float4* out_data, const float4* in0_data, const float4* in1_data, size_t inner_stride_vec, size_t num_vec)
+{
+    // Compute total threads for offset.
+    size_t offset = blockDim.x * gridDim.x;
+
+    // Run until no elements left.
+    for (size_t idx = threadIdx.x + blockDim.x * blockIdx.x; idx < num_vec; idx += offset)
+    {
+        float4 v0 = in0_data[idx];
+        float4 v1 = in1_data[idx % inner_stride_vec];
+
+        v0.x = v0.x - v1.x;
+        v0.y = v0.y - v1.y;
+        v0.z = v0.z - v1.z;
+        v0.w = v0.w - v1.w;
+
+        out_data[idx] = v0;
+    }
+}
+__global__ void broadcast_subtract_kernel(float* out_data, const float* in0_data, const float* in1_data, size_t inner_stride, size_t num_elements)
+{
+    // Compute total threads for offset.
+    size_t offset = blockDim.x * gridDim.x;
+
+    // Run until no elements left.
+    for (size_t idx = threadIdx.x + blockDim.x * blockIdx.x; idx < num_elements; idx += offset)
+        out_data[idx] = in0_data[idx] - in1_data[idx % inner_stride];
+}
+template<int BLOCK>
+__global__ void squeeze_subtract_dim(float* __restrict__ out, const float* __restrict__ in, size_t reduce_stride, size_t reduce_count)
+{
+    int j = blockIdx.x;
+    const float* base = in + j;
+
+    float sum = 0.0f;
+    for (int k = threadIdx.x; k < reduce_count; k += BLOCK)
+        sum += base[k * reduce_stride];
+
+    sum = block_sum<BLOCK>(sum);
+    if (threadIdx.x == 0)
+        out[j] -= sum;
+}
+void kernel_ops::shaped_subtract(void* out_data, const void* in0_data, const void* in1_data, const Shape& in0_shape, const Shape& in1_shape)
+{
+    constexpr int BLOCK = 256;
+    const int grid_size = device::sm_count() * 4;
+
+    RegularOpDescriptor desc = analize_op_case(in1_data, in0_shape, in1_shape);
+
+    switch (desc.type)
+    {
+    // If they have the same shape use the fast kernel.
+    case RegularOpDescriptor::SAME_SHAPE:
+    {
+        kernel_ops::subtract_tensor(out_data, in0_data, in1_data, desc.num_out);
+        break;
+    }
+    // If in1 naturally broadcasts to out use broadcasting kernel. 
+    case RegularOpDescriptor::BROADCAST:
+    {
+        // If can vectorize use vectorized kernel.
+        if (desc.num_in % 4 == 0)
+        {
+            CUDA_LAUNCH(broadcast_subtract_kernel_vec, grid_size, BLOCK,
+                (float4*)out_data,
+                (const float4*)in0_data,
+                (const float4*)in1_data,
+                desc.num_in / 4,
+                desc.num_out / 4
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+        // Else use element-wise kernel.
+        else
+        {
+            CUDA_LAUNCH(broadcast_subtract_kernel, grid_size, BLOCK,
+                (float*)out_data,
+                (const float*)in0_data,
+                (const float*)in1_data,
+                desc.num_in,
+                desc.num_out
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+        break;
+    }
+    // If in1 naturally squeezes to out use squeezing kernel.
+    case RegularOpDescriptor::SQUEEZE:
+    {
+        // First copy input 0 to output.
+        cuda::copy_gpu_to_gpu(out_data, in0_data, desc.num_out * sizeof(float));
+
+        // Then run subtraction addition kernel.
+        CUDA_LAUNCH(squeeze_subtract_dim<BLOCK>, (unsigned)desc.num_out, BLOCK,
+            (float*)out_data,
+            (const float*)in1_data,
+            desc.num_out,
+            desc.num_in / desc.num_out
+        );
+        CUDA_CHECK(cudaGetLastError());
+        break;
+    }
+    // If arbitrary broadcasting use slow path.
+    case RegularOpDescriptor::ARBITRARY:
+    {
+        // Launch shaped kernel.
+        // Vectorized if possible. 
+        if (desc.arbitrary_can_vect)
+        {
+            desc.shape_desc.numel /= 4;
+            desc.shape_desc.sizes[desc.shape_desc.num_dims - 1] /= 4;
+            for (unsigned i = 0; i < desc.shape_desc.num_dims - 1; i++)
+                desc.shape_desc.stride[i] /= 4;
+
+            CUDA_LAUNCH(broadcast_shaped_subtract_kernel_vec, grid_size, BLOCK,
+                (float4*)out_data,
+                (const float4*)in0_data,
+                desc.temp ? (const float4*)desc.temp : (const float4*)in1_data,
+                desc.shape_desc
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+        // Else element wise.
+        else
+        {
+            CUDA_LAUNCH(broadcast_shaped_subtract_kernel, grid_size, BLOCK,
+                (float*)out_data,
+                (const float*)in0_data,
+                desc.temp ? (const float*)desc.temp : (const float*)in1_data,
+                desc.shape_desc
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+        // Free temporary data.
+        if (desc.temp) MemPool::free(desc.temp);
+        break;
+    }
+    }
+}
+
+__global__ void broadcast_shaped_multiply_kernel_vec(float4* out_data, const float4* in0_data, const float4* __restrict__ in1_data, ShapeDesc desc)
+{
+    // Compute total threads for offset.
+    size_t offset = blockDim.x * gridDim.x;
+
+    // Run until no elements left.
+    for (size_t idx = threadIdx.x + blockDim.x * blockIdx.x; idx < desc.numel; idx += offset)
+    {
+        size_t data_offset = 0;
+        size_t div_idx = idx;
+
+        // Compute the address for in1_data based on sizes and strides.
+        #pragma unroll
+        for (int dim = desc.num_dims - 1; dim >= 0; dim--)
+        {
+            data_offset += (div_idx % desc.sizes[dim]) * desc.stride[dim];
+            div_idx /= desc.sizes[dim];
+        }
+
+        // Multiply the two values.
+        float4 v0 = in0_data[idx];
+        float4 v1 = in1_data[data_offset];
+
+        v0.x = v0.x * v1.x;
+        v0.y = v0.y * v1.y;
+        v0.z = v0.z * v1.z;
+        v0.w = v0.w * v1.w;
+
+        out_data[idx] = v0;
+    }
+}
+__global__ void broadcast_shaped_multiply_kernel(float* out_data, const float* in0_data, const float* __restrict__ in1_data, ShapeDesc desc)
+{
+    // Compute total threads for offset.
+    size_t offset = blockDim.x * gridDim.x;
+
+    // Run until no elements left.
+    for (size_t idx = threadIdx.x + blockDim.x * blockIdx.x; idx < desc.numel; idx += offset)
+    {
+        size_t data_offset = 0;
+        size_t div_idx = idx;
+
+        // Compute the address for in1_data based on sizes and strides.
+        #pragma unroll
+        for (int dim = desc.num_dims - 1; dim >= 0; dim--)
+        {
+            data_offset += (div_idx % desc.sizes[dim]) * desc.stride[dim];
+            div_idx /= desc.sizes[dim];
+        }
+
+        // Multiply the two values.
+        out_data[idx] = in0_data[idx] * in1_data[data_offset];
+    }
+}
+__global__ void broadcast_multiply_kernel_vec(float4* out_data, const float4* in0_data, const float4* in1_data, size_t inner_stride_vec, size_t num_vec)
+{
+    // Compute total threads for offset.
+    size_t offset = blockDim.x * gridDim.x;
+
+    // Run until no elements left.
+    for (size_t idx = threadIdx.x + blockDim.x * blockIdx.x; idx < num_vec; idx += offset)
+    {
+        float4 v0 = in0_data[idx];
+        float4 v1 = in1_data[idx % inner_stride_vec];
+
+        v0.x = v0.x * v1.x;
+        v0.y = v0.y * v1.y;
+        v0.z = v0.z * v1.z;
+        v0.w = v0.w * v1.w;
+
+        out_data[idx] = v0;
+    }
+}
+__global__ void broadcast_multiply_kernel(float* out_data, const float* in0_data, const float* in1_data, size_t inner_stride, size_t num_elements)
+{
+    // Compute total threads for offset.
+    size_t offset = blockDim.x * gridDim.x;
+
+    // Run until no elements left.
+    for (size_t idx = threadIdx.x + blockDim.x * blockIdx.x; idx < num_elements; idx += offset)
+        out_data[idx] = in0_data[idx] * in1_data[idx % inner_stride];
+}
+template<int BLOCK>
+__global__ void squeeze_multiply_dim(float* __restrict__ out, const float* __restrict__ in, size_t reduce_stride, size_t reduce_count)
+{
+    int j = blockIdx.x;
+    const float* base = in + j;
+
+    float sum = 0.0f;
+    for (int k = threadIdx.x; k < reduce_count; k += BLOCK)
+        sum += base[k * reduce_stride];
+
+    sum = block_sum<BLOCK>(sum);
+    if (threadIdx.x == 0)
+        out[j] *= sum;
+}
+void kernel_ops::shaped_multiply(void* out_data, const void* in0_data, const void* in1_data, const Shape& in0_shape, const Shape& in1_shape)
+{
+    constexpr int BLOCK = 256;
+    const int grid_size = device::sm_count() * 4;
+
+    RegularOpDescriptor desc = analize_op_case(in1_data, in0_shape, in1_shape);
+
+    switch (desc.type)
+    {
+    // If they have the same shape use the fast kernel.
+    case RegularOpDescriptor::SAME_SHAPE:
+    {
+        kernel_ops::multiply_tensor(out_data, in0_data, in1_data, desc.num_out);
+        break;
+    }
+    // If in1 naturally broadcasts to out use broadcasting kernel. 
+    case RegularOpDescriptor::BROADCAST:
+    {
+        // If can vectorize use vectorized kernel.
+        if (desc.num_in % 4 == 0)
+        {
+            CUDA_LAUNCH(broadcast_multiply_kernel_vec, grid_size, BLOCK,
+                (float4*)out_data,
+                (const float4*)in0_data,
+                (const float4*)in1_data,
+                desc.num_in / 4,
+                desc.num_out / 4
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+        // Else use element-wise kernel.
+        else
+        {
+            CUDA_LAUNCH(broadcast_multiply_kernel, grid_size, BLOCK,
+                (float*)out_data,
+                (const float*)in0_data,
+                (const float*)in1_data,
+                desc.num_in,
+                desc.num_out
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+        break;
+    }
+    // If in1 naturally squeezes to out use squeezing kernel.
+    case RegularOpDescriptor::SQUEEZE:
+    {
+        // First copy input 0 to output.
+        cuda::copy_gpu_to_gpu(out_data, in0_data, desc.num_out * sizeof(float));
+
+        // Then run summation addition kernel.
+        CUDA_LAUNCH(squeeze_multiply_dim<BLOCK>, (unsigned)desc.num_out, BLOCK,
+            (float*)out_data,
+            (const float*)in1_data,
+            desc.num_out,
+            desc.num_in / desc.num_out
+        );
+        CUDA_CHECK(cudaGetLastError());
+        break;
+    }
+    // If arbitrary broadcasting use slow path.
+    case RegularOpDescriptor::ARBITRARY:
+    {
+        // Launch shaped kernel.
+        // Vectorized if possible. 
+        if (desc.arbitrary_can_vect)
+        {
+            desc.shape_desc.numel /= 4;
+            desc.shape_desc.sizes[desc.shape_desc.num_dims - 1] /= 4;
+            for (unsigned i = 0; i < desc.shape_desc.num_dims - 1; i++)
+                desc.shape_desc.stride[i] /= 4;
+
+            CUDA_LAUNCH(broadcast_shaped_multiply_kernel_vec, grid_size, BLOCK,
+                (float4*)out_data,
+                (const float4*)in0_data,
+                desc.temp ? (const float4*)desc.temp : (const float4*)in1_data,
+                desc.shape_desc
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+        // Else element wise.
+        else
+        {
+            CUDA_LAUNCH(broadcast_shaped_multiply_kernel, grid_size, BLOCK,
+                (float*)out_data,
+                (const float*)in0_data,
+                desc.temp ? (const float*)desc.temp : (const float*)in1_data,
+                desc.shape_desc
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+        // Free temporary data.
+        if (desc.temp) MemPool::free(desc.temp);
+        break;
+    }
+    }
+}
+
+__global__ void broadcast_shaped_divide_kernel_vec(float4* out_data, const float4* in0_data, const float4* __restrict__ in1_data, ShapeDesc desc)
+{
+    // Compute total threads for offset.
+    size_t offset = blockDim.x * gridDim.x;
+
+    // Run until no elements left.
+    for (size_t idx = threadIdx.x + blockDim.x * blockIdx.x; idx < desc.numel; idx += offset)
+    {
+        size_t data_offset = 0;
+        size_t div_idx = idx;
+
+        // Compute the address for in1_data based on sizes and strides.
+        #pragma unroll
+        for (int dim = desc.num_dims - 1; dim >= 0; dim--)
+        {
+            data_offset += (div_idx % desc.sizes[dim]) * desc.stride[dim];
+            div_idx /= desc.sizes[dim];
+        }
+
+        // Divide the two values.
+        float4 v0 = in0_data[idx];
+        float4 v1 = in1_data[data_offset];
+
+        v0.x = v0.x / v1.x;
+        v0.y = v0.y / v1.y;
+        v0.z = v0.z / v1.z;
+        v0.w = v0.w / v1.w;
+
+        out_data[idx] = v0;
+    }
+}
+__global__ void broadcast_shaped_divide_kernel(float* out_data, const float* in0_data, const float* __restrict__ in1_data, ShapeDesc desc)
+{
+    // Compute total threads for offset.
+    size_t offset = blockDim.x * gridDim.x;
+
+    // Run until no elements left.
+    for (size_t idx = threadIdx.x + blockDim.x * blockIdx.x; idx < desc.numel; idx += offset)
+    {
+        size_t data_offset = 0;
+        size_t div_idx = idx;
+
+        // Compute the address for in1_data based on sizes and strides.
+        #pragma unroll
+        for (int dim = desc.num_dims - 1; dim >= 0; dim--)
+        {
+            data_offset += (div_idx % desc.sizes[dim]) * desc.stride[dim];
+            div_idx /= desc.sizes[dim];
+        }
+
+        // Divide the two values.
+        out_data[idx] = in0_data[idx] / in1_data[data_offset];
+    }
+}
+__global__ void broadcast_divide_kernel_vec(float4* out_data, const float4* in0_data, const float4* in1_data, size_t inner_stride_vec, size_t num_vec)
+{
+    // Compute total threads for offset.
+    size_t offset = blockDim.x * gridDim.x;
+
+    // Run until no elements left.
+    for (size_t idx = threadIdx.x + blockDim.x * blockIdx.x; idx < num_vec; idx += offset)
+    {
+        float4 v0 = in0_data[idx];
+        float4 v1 = in1_data[idx % inner_stride_vec];
+
+        v0.x = v0.x / v1.x;
+        v0.y = v0.y / v1.y;
+        v0.z = v0.z / v1.z;
+        v0.w = v0.w / v1.w;
+
+        out_data[idx] = v0;
+    }
+}
+__global__ void broadcast_divide_kernel(float* out_data, const float* in0_data, const float* in1_data, size_t inner_stride, size_t num_elements)
+{
+    // Compute total threads for offset.
+    size_t offset = blockDim.x * gridDim.x;
+
+    // Run until no elements left.
+    for (size_t idx = threadIdx.x + blockDim.x * blockIdx.x; idx < num_elements; idx += offset)
+        out_data[idx] = in0_data[idx] / in1_data[idx % inner_stride];
+}
+template<int BLOCK>
+__global__ void squeeze_divide_dim(float* __restrict__ out, const float* __restrict__ in, size_t reduce_stride, size_t reduce_count)
+{
+    int j = blockIdx.x;
+    const float* base = in + j;
+
+    float sum = 0.0f;
+    for (int k = threadIdx.x; k < reduce_count; k += BLOCK)
+        sum += base[k * reduce_stride];
+
+    sum = block_sum<BLOCK>(sum);
+    if (threadIdx.x == 0)
+        out[j] /= sum;
+}
+void kernel_ops::shaped_divide(void* out_data, const void* in0_data, const void* in1_data, const Shape& in0_shape, const Shape& in1_shape)
+{
+    constexpr int BLOCK = 256;
+    const int grid_size = device::sm_count() * 4;
+
+    RegularOpDescriptor desc = analize_op_case(in1_data, in0_shape, in1_shape);
+
+    switch (desc.type)
+    {
+    // If they have the same shape use the fast kernel.
+    case RegularOpDescriptor::SAME_SHAPE:
+    {
+        kernel_ops::divide_tensor(out_data, in0_data, in1_data, desc.num_out);
+        break;
+    }
+    // If in1 naturally broadcasts to out use broadcasting kernel. 
+    case RegularOpDescriptor::BROADCAST:
+    {
+        // If can vectorize use vectorized kernel.
+        if (desc.num_in % 4 == 0)
+        {
+            CUDA_LAUNCH(broadcast_divide_kernel_vec, grid_size, BLOCK,
+                (float4*)out_data,
+                (const float4*)in0_data,
+                (const float4*)in1_data,
+                desc.num_in / 4,
+                desc.num_out / 4
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+        // Else use element-wise kernel.
+        else
+        {
+            CUDA_LAUNCH(broadcast_divide_kernel, grid_size, BLOCK,
+                (float*)out_data,
+                (const float*)in0_data,
+                (const float*)in1_data,
+                desc.num_in,
+                desc.num_out
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+        break;
+    }
+    // If in1 naturally squeezes to out use squeezing kernel.
+    case RegularOpDescriptor::SQUEEZE:
+    {
+        // First copy input 0 to output.
+        cuda::copy_gpu_to_gpu(out_data, in0_data, desc.num_out * sizeof(float));
+
+        // Then run summation addition kernel.
+        CUDA_LAUNCH(squeeze_divide_dim<BLOCK>, (unsigned)desc.num_out, BLOCK,
+            (float*)out_data,
+            (const float*)in1_data,
+            desc.num_out,
+            desc.num_in / desc.num_out
+        );
+        CUDA_CHECK(cudaGetLastError());
+        break;
+    }
+    // If arbitrary broadcasting use slow path.
+    case RegularOpDescriptor::ARBITRARY:
+    {
+        // Launch shaped kernel.
+        // Vectorized if possible. 
+        if (desc.arbitrary_can_vect)
+        {
+            desc.shape_desc.numel /= 4;
+            desc.shape_desc.sizes[desc.shape_desc.num_dims - 1] /= 4;
+            for (unsigned i = 0; i < desc.shape_desc.num_dims - 1; i++)
+                desc.shape_desc.stride[i] /= 4;
+
+            CUDA_LAUNCH(broadcast_shaped_divide_kernel_vec, grid_size, BLOCK,
+                (float4*)out_data,
+                (const float4*)in0_data,
+                desc.temp ? (const float4*)desc.temp : (const float4*)in1_data,
+                desc.shape_desc
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+        // Else element wise.
+        else
+        {
+            CUDA_LAUNCH(broadcast_shaped_divide_kernel, grid_size, BLOCK,
+                (float*)out_data,
+                (const float*)in0_data,
+                desc.temp ? (const float*)desc.temp : (const float*)in1_data,
+                desc.shape_desc
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+        // Free temporary data.
+        if (desc.temp) MemPool::free(desc.temp);
+        break;
+    }
+    }
 }

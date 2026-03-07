@@ -10,7 +10,7 @@ private:
 public:
 	Shape() = default;
 	Shape(const Shape& other) { *this = other; }
-	Shape(unsigned dim, int* sizes);
+	explicit Shape(unsigned dim, int* sizes);
 
 	template<class... args>
 	Shape(args... sizes)
@@ -35,6 +35,53 @@ public:
 	const char* str(const char* fmt = "%i") const;
 };
 
+class VectorInt
+{
+private:
+	unsigned _length = 0u;
+	unsigned _offset = 0u;
+
+	struct VecInternals
+	{
+		void* _data = nullptr;
+		char _device[16] = "cpu";
+		bool _is_gpu = false;
+		unsigned _instances = 0u;
+	}
+	*_internals = nullptr;
+
+	static inline int mod(int a, int b) { return ((a % b) + b) % b; }
+	void reduce_instance_count();
+public:
+	explicit VectorInt() = default;
+	explicit VectorInt(const VectorInt& other) { *this = other; }
+	explicit VectorInt(unsigned length, const char* device = "cpu");
+	VectorInt(int a, int b, int stride = 1, const char* device = "cpu");
+	~VectorInt() { reduce_instance_count(); }
+	VectorInt& operator=(const VectorInt& other);
+
+
+	int& operator[](int i);
+	const int& operator[](int i) const;
+	VectorInt operator[](const VectorInt& idxs) const;
+
+	int get(int i) const;
+	void set(int i, int val);
+	void set(int a, int b, int* values);
+	
+	VectorInt to(const char* device) const;
+
+	VectorInt subset(int a, int b) const;
+	VectorInt copy() const;
+
+	int* data()					  { return _internals ? (int*)_internals->_data + _offset : nullptr; }
+	const int* data()		const { return _internals ? (int*)_internals->_data + _offset : nullptr; }
+	const char* device()	const { return _internals ? _internals->_device : nullptr; }
+	bool is_gpu()			const { return _internals ? _internals->_is_gpu : false; }
+	unsigned len()			const { return _length; }
+	const char* str(const char* fmt = "%i") const;
+};
+
 class Tensor;
 namespace Functional
 {
@@ -42,16 +89,16 @@ namespace Functional
 	Tensor matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& bias);
 	Tensor cat(const Tensor& ten0, const Tensor& ten1, int dim);
 	Tensor mean_squared_error(const Tensor& ten0, const Tensor& ten1);
-	Tensor cross_entropy_loss(const Tensor& logits, unsigned* labels);
-	Tensor negative_log_likelihood(const Tensor& probs, unsigned* labels);
-	Tensor one_hot(const Shape& size_x_labels, unsigned* labels, const char* device = "cpu");
+	Tensor cross_entropy_loss(const Tensor& logits, const VectorInt& labels);
+	Tensor negative_log_likelihood(const Tensor& probs, const VectorInt& labels);
+	Tensor one_hot(const Shape& size_x_labels, const VectorInt& labels);
 	Tensor causal_mask(unsigned L, const char* device = "cpu");
 }
 namespace Random
 {
 	void set_seed(unsigned long long seed);
 	void set_cuda_seed(unsigned long long seed);
-	void shuffle(unsigned size, int* data);
+	void shuffle(VectorInt& values);
 	float rand_normal(float mean, float std);
 	float rand_uniform(float min, float max);
 	int rand_int(int min, int max);
@@ -210,6 +257,8 @@ public:
 
 	// --- Shape operators ---
 
+	Tensor operator[](const VectorInt& idxs) const;							// Returns a tensor containing the leading dimensions with the indices specified.
+
 	Tensor transpose(int dim0, int dim1) const;								// Returns a tensor with the specified dimensions transposed.
 	Tensor subset(const Shape& shape, const Shape& start_indices) const;	// Returns a subset of the tensor with the specified shape starting from the specified indices.
 	Tensor modify(const Tensor& other, const Shape& start_indices) const;	// Returns a tensor with the same shape but with a subset substituted by the specified tensor.
@@ -275,6 +324,6 @@ public:
 	friend Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& bias);
 	friend Tensor Functional::cat(const Tensor& ten0, const Tensor& ten1, int dim);
 	friend Tensor Functional::mean_squared_error(const Tensor& ten0, const Tensor& ten1);
-	friend Tensor Functional::cross_entropy_loss(const Tensor& logits, unsigned* labels);
-	friend Tensor Functional::negative_log_likelihood(const Tensor& probs, unsigned* labels);
+	friend Tensor Functional::cross_entropy_loss(const Tensor& logits, const VectorInt& labels);
+	friend Tensor Functional::negative_log_likelihood(const Tensor& probs, const VectorInt& labels);
 };

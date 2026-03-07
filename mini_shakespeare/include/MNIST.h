@@ -187,14 +187,25 @@ public:
 
 static void run_mlp_training_run()
 {
-	float** training_images   = NumberRecognition::getImages(TRAINING, 0, 50000);
-	unsigned* training_labels = NumberRecognition::getLabels(TRAINING, 0, 50000);
-	float** testing_images    = NumberRecognition::getImages( TESTING, 0, 10000);
-	unsigned* testing_labels  = NumberRecognition::getLabels( TESTING, 0, 10000);
-	printf("Images loaded successfully!\n\n");
-
 	unsigned train_size = 50000;
 	unsigned test_size  = 10000;
+
+	float** training_images   = NumberRecognition::getImages(TRAINING, 0, train_size);
+	unsigned* training_labels = NumberRecognition::getLabels(TRAINING, 0, train_size);
+	float** testing_images    = NumberRecognition::getImages( TESTING, 0,  test_size);
+	unsigned* testing_labels  = NumberRecognition::getLabels( TESTING, 0,  test_size);
+
+	Tensor train_data({ train_size, IMAGE_DIM });
+	Tensor test_data({ test_size, IMAGE_DIM });
+	VectorInt train_labels(train_size); 
+	VectorInt test_labels(test_size);
+
+	for (unsigned i = 0; i < train_size; i++) train_data.internal_set_vector({ i }, training_images[i]);
+	for (unsigned i = 0; i <  test_size; i++)  test_data.internal_set_vector({ i },  testing_images[i]);
+	for (unsigned i = 0; i < train_size; i++) train_labels[i] = training_labels[i];
+	for (unsigned i = 0; i <  test_size; i++)  test_labels[i] =  testing_labels[i];
+
+	printf("MNIST loaded successfully!\n\n");
 
 	unsigned epochs     = 100;
 	unsigned batch_size = 256;
@@ -207,29 +218,18 @@ static void run_mlp_training_run()
 	Optimizer::SGD optimizer(mlp, momentum, initial_lr, weight_decay);
 	Scheduler::CosineLR scheduler(optimizer, initial_lr, final_lr, epochs);
 
-	unsigned* labels = new unsigned[batch_size];
-	int* randperm = new int[train_size];
-	for (unsigned i = 0; i < train_size; i++)
-		randperm[i] = i;
-
-	auto get_batch = [&](unsigned end, unsigned start, bool train)
-		{
-			Tensor in({ end - start, IMAGE_DIM });
-			for (unsigned v = start; v < end; v++)
-			{
-				in.internal_set_vector({ v - start }, train ? training_images[randperm[v]] : testing_images[v]);
-				labels[v - start] = train ? training_labels[randperm[v]] : testing_labels[v];
-			}
-			return in;
-		};
+	VectorInt randperm(0, train_size);
 
 	for (unsigned epoch = 1; epoch < epochs + 1; epoch++)
 	{
 		// Training set.
 		mlp.with_grad();
 		{
-			Random::shuffle(train_size, randperm);
-			unsigned start = 0u, end = 0u;
+			Random::shuffle(randperm);
+			Tensor perm_train_data = train_data[randperm];
+			VectorInt perm_train_labels = train_labels[randperm];
+
+			int start = 0u, end = 0u;
 			while (end < train_size)
 			{
 				// Generate input tensor.
@@ -237,7 +237,8 @@ static void run_mlp_training_run()
 				end = (train_size < start + batch_size) ? train_size : start + batch_size;
 
 				// Get input tensor.
-				Tensor in = get_batch(end, start, true);
+				Tensor in = perm_train_data[{start, end}];
+				VectorInt labels = train_labels[{start, end}];
 
 				// Forward pass.
 				Tensor out = mlp(in);
@@ -255,7 +256,7 @@ static void run_mlp_training_run()
 		{
 			float accum_loss = 0.f;
 			unsigned correct_count = 0u;
-			unsigned start = 0u, end = 0u;
+			int start = 0u, end = 0u;
 			while (end < test_size)
 			{
 				// Generate input tensor.
@@ -263,7 +264,8 @@ static void run_mlp_training_run()
 				end = (test_size < start + batch_size) ? test_size : start + batch_size;
 
 				// Get input tensor.
-				Tensor in = get_batch(end, start, false);
+				Tensor in = test_data[{start, end}];
+				VectorInt labels = test_labels[{start, end}];
 
 				// Forward pass.
 				Tensor out = mlp(in);
@@ -286,7 +288,4 @@ static void run_mlp_training_run()
 			);
 		}
 	}
-
-	delete[] randperm;
-	delete[] labels;
 }

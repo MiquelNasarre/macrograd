@@ -159,6 +159,252 @@ const char* Shape::str(const char* fmt) const
 
 /*
 --------------------------------------------------------------------------------------------------------------------------
+ VectorInt functions
+--------------------------------------------------------------------------------------------------------------------------
+*/
+
+void VectorInt::reduce_instance_count()
+{
+	if (!_internals) 
+		return;
+
+	_internals->_instances--;
+	if (!_internals->_instances)
+	{
+		if (_internals->_is_gpu)MemPool::free(_internals->_data);
+		else ::operator delete[](_internals->_data);
+		delete _internals;
+	}
+}
+
+VectorInt::VectorInt(unsigned length, const char* device)
+{
+	TENSOR_CHECK(length,
+		"To initialize an empty VectorInt please use the default constructor."
+	);
+
+	_internals = new VecInternals;
+	_internals->_instances++;
+	_length = length;
+	_offset = 0;
+
+	snprintf(_internals->_device, sizeof(_internals->_device), "%s", device);
+
+	if (!strcmp(device, "cpu"))
+	{
+		_internals->_is_gpu = false;
+		_internals->_data = ::operator new[](length * sizeof(int));
+		// Be clean and zero it out.
+		memset(_internals->_data, 0, length * sizeof(int));
+	}
+	else if (!strcmp(device, "cuda"))
+	{
+		_internals->_is_gpu = true;
+		_internals->_data = MemPool::allocate(length * sizeof(int));
+	}
+	else TENSOR_ERROR(
+		"Unknown device string found \"%s\".\n"
+		"Supported devices are \"cpu\" and \"cuda\".",
+		device
+	);
+}
+
+VectorInt::VectorInt(int a, int b, int stride, const char* device)
+{
+	TENSOR_CHECK((b - a > 0 && stride > 0) || (b - a < 0 && stride < 0),
+		"To generate an aranged VectorInt the direction a -> b must match the stride sign.\n"
+		"Found values | a: %i | b: %i | stride: %i", a, b, stride
+	);
+
+	TENSOR_CHECK((b - a) % stride == 0,
+		"Invalid values found for an aranged VectorInt initialization, stride must divide 'b - a'.\n"
+		"Found values | a: %i | b: %i | stride: %i", a, b, stride
+	);
+
+	unsigned length = unsigned((b - a) / stride);
+	*this = VectorInt(length, device);
+
+	if (is_gpu())
+		kernel_ops::arange(_internals->_data, a, stride, length);
+
+	else for (unsigned i = 0; i < length; i++)
+		((int*)_internals->_data)[i] = a + i * stride;
+}
+
+VectorInt& VectorInt::operator=(const VectorInt& other)
+{
+	if (other._internals)
+		other._internals->_instances++;
+
+	reduce_instance_count();
+
+	_length = other._length;
+	_internals = other._internals;
+	_offset = other._offset;
+
+	return *this;
+}
+
+VectorInt VectorInt::operator[](const VectorInt& idxs) const
+{
+	return VectorInt();
+}
+
+int& VectorInt::operator[](int i)
+{
+	TENSOR_CHECK(_internals,
+		"Operator [] on an empty VectorInt is not allowed"
+	);
+	TENSOR_CHECK(!_internals->_is_gpu,
+		"Operator [] on a GPU VectorInt is not allowed"
+	);
+
+	int idx = mod(i, (int)_length);
+	return ((int*)_internals->_data + _offset)[idx];
+}
+
+const int& VectorInt::operator[](int i) const
+{
+	TENSOR_CHECK(_internals,
+		"Operator [] on an empty VectorInt is not allowed"
+	);
+	TENSOR_CHECK(!_internals->_is_gpu,
+		"Operator [] on a GPU VectorInt is not allowed"
+	);
+
+	int idx = mod(i, (int)_length);
+	return ((int*)_internals->_data + _offset)[idx];
+}
+
+int VectorInt::get(int i) const
+{
+	TENSOR_CHECK(_internals,
+		"Get function on an empty VectorInt is not allowed"
+	);
+
+	int idx = mod(i, (int)_length);
+	int val;
+	if (_internals->_is_gpu) cuda::copy_gpu_to_cpu(&val, (int*)_internals->_data + _offset + idx, sizeof(int));
+	else val = ((int*)_internals->_data + _offset)[idx];
+
+	return val;
+}
+
+void VectorInt::set(int i, int val)
+{
+	TENSOR_CHECK(_internals,
+		"Set function on an empty VectorInt is not allowed"
+	);
+
+	int idx = mod(i, (int)_length);
+
+	if (_internals->_is_gpu) cuda::copy_cpu_to_gpu((int*)_internals->_data + _offset + idx, &val, sizeof(int));
+	else ((int*)_internals->_data + _offset)[idx] = val;
+}
+
+VectorInt VectorInt::to(const char* device) const
+{
+	TENSOR_CHECK(_internals,
+		"'to()' function on an empty VectorInt is not allowed"
+	);
+
+	VectorInt out(_length, device);
+	
+	if (_internals->_is_gpu)
+	{
+		if (out._internals->_is_gpu)
+			cuda::copy_gpu_to_gpu(out._internals->_data, (int*)_internals->_data + _offset, _length * sizeof(int));
+		else 
+			cuda::copy_gpu_to_cpu(out._internals->_data, (int*)_internals->_data + _offset, _length * sizeof(int));
+	}
+	else
+	{
+		if (out._internals->_is_gpu)
+			cuda::copy_cpu_to_gpu(out._internals->_data, (int*)_internals->_data + _offset, _length * sizeof(int));
+		else
+			memcpy(out._internals->_data, (int*)_internals->_data + _offset, _length * sizeof(int));
+	}
+
+	return out;
+}
+
+VectorInt VectorInt::subset(int a, int b) const
+{
+	TENSOR_CHECK(_internals,
+		"Subset function on an empty VectorInt is not allowed"
+	);
+
+	int idx_a = mod(a, (int)_length);
+	int idx_b = mod(b - 1, (int)_length) + 1;
+
+	TENSOR_CHECK(idx_b >= idx_a,
+		"Trying to get a subset of a VectorInt while the indices provided are reversed.\n"
+		"Modulo index 'a': %i | Modulo index 'b': %i", idx_a, idx_b
+	);
+	if (idx_a == idx_b)
+		return VectorInt();
+
+	VectorInt out = *this;
+	out._length = idx_b - idx_a;
+	out._offset += idx_a;
+
+	return out;
+}
+
+VectorInt VectorInt::copy() const
+{
+	if (!_internals)
+		return VectorInt();
+
+	VectorInt out(_length, _internals->_device);
+
+	if (_internals->_is_gpu)
+		cuda::copy_gpu_to_gpu(out._internals->_data, (int*)_internals->_data + _offset, _length * sizeof(int));
+	else
+		memcpy(out._internals->_data, (int*)_internals->_data + _offset, _length * sizeof(int));
+
+	return out;
+}
+
+const char* VectorInt::str(const char* fmt) const
+{
+	constexpr unsigned truncation_size = 16;
+	constexpr unsigned truncation_count = 8;
+
+	thread_local static char buffer[16][256] = {};
+	thread_local static int next = 0;
+
+	char* buf = buffer[next % 16];
+	int left = 256;
+
+	auto s_print = [&](const char* fmt, ...)
+	{
+		va_list ap;
+		va_start(ap, fmt);
+		int added = vsnprintf(buf, left, fmt, ap);
+		va_end(ap);
+		buf += added, left -= added;
+	};
+
+	s_print("[");
+	for (unsigned i = 0; i < _length; i++)
+	{
+		if (i == truncation_count && _length > truncation_size)
+		{
+			i = _length - truncation_count;
+			s_print("..., ");
+		}
+		s_print(fmt, get(i));
+
+		if (i < _length - 1)
+			s_print(", ");
+	}
+	s_print("]");
+	return buffer[(next++) % 16];
+}
+
+/*
+--------------------------------------------------------------------------------------------------------------------------
  Constructor / Destructor
 --------------------------------------------------------------------------------------------------------------------------
 */
@@ -300,7 +546,7 @@ const char* Tensor::array_str(const char* fmt) const
 	thread_local static char buffer[8][4096] = {};
 	thread_local static int next = 0;
 
-	char* buf = buffer[(next++) % 8];
+	char* buf = buffer[next % 8];
 	int left = 4096;
 
 	auto s_print = [&](const char* fmt, ...)
@@ -392,7 +638,7 @@ const char* Tensor::array_str(const char* fmt) const
 		}
 	}
 
-	return buffer[(next - 1) % 8];
+	return buffer[(next++) % 8];
 }
 
 const char* Tensor::device() const

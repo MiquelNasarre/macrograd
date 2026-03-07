@@ -68,7 +68,7 @@ void Tensor::internal_add(float val)
 	const unsigned numel = this->numel();
 	
 	if (is_gpu())
-		kernel_ops::add_scalar(data, val, numel);
+		kernel_ops::add_scalar(data, data, val, numel);
 
 	else
 	{
@@ -88,7 +88,7 @@ void Tensor::internal_multiply(float val)
 	const unsigned numel = this->numel();
 
 	if (is_gpu())
-		kernel_ops::multiply_scalar(data, val, numel);
+		kernel_ops::multiply_scalar(data, data, val, numel);
 
 	else
 	{
@@ -137,7 +137,7 @@ void Tensor::internal_add(const Tensor& other)
 	const int numel = this->numel();
 
 	if (is_gpu())
-		kernel_ops::add_tensor(data, other_data, numel);
+		kernel_ops::add_tensor(data, data, other_data, numel);
 
 	else
 	{
@@ -197,7 +197,7 @@ void Tensor::internal_subtract(const Tensor& other)
 	const int numel = this->numel();
 
 	if (is_gpu())
-		kernel_ops::subtract_tensor(data, other_data, numel);
+		kernel_ops::subtract_tensor(data, data, other_data, numel);
 	else
 	{
 		int idx = -1;
@@ -226,7 +226,7 @@ void Tensor::internal_multiply(const Tensor& other)
 	const int numel = this->numel();
 
 	if (is_gpu())
-		kernel_ops::multiply_tensor(data, other_data, numel);
+		kernel_ops::multiply_tensor(data, data, other_data, numel);
 	else
 	{
 		int idx = -1;
@@ -488,6 +488,13 @@ Tensor Tensor::unsqueeze(int dim) const
  Shape Operators
 --------------------------------------------------------------------------------------------------------------------------
 */
+
+// Returns a tensor containing the leading dimensions with the indices specified.
+
+Tensor Tensor::operator[](const VectorInt& idxs) const
+{
+	return Tensor();
+}
 
 // Returns a tensor with the specified dimensions transposed.
 
@@ -2077,24 +2084,25 @@ Tensor operator+(const Tensor& ten0, const Tensor& ten1)
 
 	// Create output with the same shape as first tensor.
 	Tensor out(ten0.shape(), ten0.device(), requires_grad);
-	
-	// Sum dimensions on ten1 if necessary.
-	Tensor ten1_summed = ten1;
-	for (unsigned i = 0; i < ten0.dim(); i++)
-		if (ten0.size(i) == 1 && ten1_summed.size(i) != 1)
-			ten1_summed = ten1_summed.sum(i, true);
+
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten0_data = __dataof(ten0);
+	float* ten1_data = __dataof(ten1);
 
 	// Now we actually sum the tensors.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::shaped_add(out_data, ten0_data, ten1_data, out._view, ten1._view);
 	else
 	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten0_data = __dataof(ten0);
-		float* ten1_data = __dataof(ten1_summed);
+		// Sum dimensions on ten1 if necessary.
+		Tensor ten1_summed = ten1.no_grad();
+		for (unsigned i = 0; i < ten0.dim(); i++)
+			if (ten0.size(i) == 1 && ten1_summed.size(i) != 1)
+				ten1_summed = ten1_summed.sum(i, true);
+
+		float* ten1_summed_data = __dataof(ten1_summed);
+
 		// Exptract the shapes.
 		Shape out_shape = out.shape();
 		Shape ten0_shape = ten0.shape();
@@ -2105,9 +2113,9 @@ Tensor operator+(const Tensor& ten0, const Tensor& ten1)
 			if (out_shape[i] > 1)
 				last_long_dim = i;
 		// Find the stride, will be 1 except for ten1 if broadcasting.
-		const unsigned dout = out._stride[last_long_dim];
-		const unsigned dten0 = ten0._stride[last_long_dim];
-		const unsigned dten1 = ten1_summed._stride[last_long_dim];
+		const unsigned dout = (out._view[last_long_dim] != 1) ? 1 : 0;
+		const unsigned dten0 = (ten0._view[last_long_dim] != 1) ? 1 : 0;
+		const unsigned dten1 = (ten1_summed._view[last_long_dim] != 1) ? 1 : 0;
 		// Find the vector length to iterate.
 		const unsigned vector_len = out_shape[last_long_dim];
 		// Create a running shape to count.
@@ -2118,15 +2126,15 @@ Tensor operator+(const Tensor& ten0, const Tensor& ten1)
 			unsigned out_idx = 0, ten0_idx = 0, ten1_idx = 0;
 			for (unsigned d = 0; d < counting_shape.dim(); d++)
 			{
-				out_idx += counting_shape[d] * out._stride[d];
-				ten0_idx += counting_shape[d] * ten0._stride[d];
-				ten1_idx += counting_shape[d] * ten1_summed._stride[d];
+				if (out._view[d] != 1) out_idx += counting_shape[d] * out._stride[d];
+				if (ten0._view[d] != 1) ten0_idx += counting_shape[d] * ten0._stride[d];
+				if (ten1_summed._view[d] != 1) ten1_idx += counting_shape[d] * ten1_summed._stride[d];
 			}
 
 			unsigned count = 0u;
 			while (count++ < vector_len)
 			{
-				out_data[out_idx] = ten0_data[ten0_idx] + ten1_data[ten1_idx];
+				out_data[out_idx] = ten0_data[ten0_idx] + ten1_summed_data[ten1_idx];
 				out_idx += dout, ten0_idx += dten0, ten1_idx += dten1;
 			}
 
@@ -2153,7 +2161,7 @@ Tensor operator+(const Tensor& ten0, const Tensor& ten1)
 
 	// If it was a gradient operation store a AddOp instance.
 	if (requires_grad)
-		out._internals->op = new AddOp(ten0, ten1_summed, out);
+		out._internals->op = new AddOp(ten0, ten1, out);
 
 	// Return out.
 	return out;
@@ -2219,23 +2227,24 @@ Tensor operator-(const Tensor& ten0, const Tensor& ten1)
 	// Create output with the same shape as first tensor.
 	Tensor out(ten0.shape(), ten0.device(), requires_grad);
 
-	// Sum dimensions on ten1 if necessary.
-	Tensor ten1_summed = ten1;
-	for (unsigned i = 0; i < ten0.dim(); i++)
-		if (ten0.size(i) == 1 && ten1_summed.size(i) != 1)
-			ten1_summed = ten1_summed.sum(i, true);
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten0_data = __dataof(ten0);
+	float* ten1_data = __dataof(ten1);
 
-	// Now we actually sum the tensors.
+	// Now we actually subtract the tensors.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::shaped_subtract(out_data, ten0_data, ten1_data, out._view, ten1._view);
 	else
 	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten0_data = __dataof(ten0);
-		float* ten1_data = __dataof(ten1_summed);
+		// Sum dimensions on ten1 if necessary.
+		Tensor ten1_summed = ten1.no_grad();
+		for (unsigned i = 0; i < ten0.dim(); i++)
+			if (ten0.size(i) == 1 && ten1_summed.size(i) != 1)
+				ten1_summed = ten1_summed.sum(i, true);
+
+		float* ten1_summed_data = __dataof(ten1_summed);
+
 		// Exptract the shapes.
 		Shape out_shape = out.shape();
 		Shape ten0_shape = ten0.shape();
@@ -2246,9 +2255,9 @@ Tensor operator-(const Tensor& ten0, const Tensor& ten1)
 			if (out_shape[i] > 1)
 				last_long_dim = i;
 		// Find the stride, will be 1 except for ten1 if broadcasting.
-		const unsigned dout = out._stride[last_long_dim];
-		const unsigned dten0 = ten0._stride[last_long_dim];
-		const unsigned dten1 = ten1_summed._stride[last_long_dim];
+		const unsigned dout = (out._view[last_long_dim] != 1) ? 1 : 0;
+		const unsigned dten0 = (ten0._view[last_long_dim] != 1) ? 1 : 0;
+		const unsigned dten1 = (ten1_summed._view[last_long_dim] != 1) ? 1 : 0;
 		// Find the vector length to iterate.
 		const unsigned vector_len = out_shape[last_long_dim];
 		// Create a running shape to count.
@@ -2259,15 +2268,15 @@ Tensor operator-(const Tensor& ten0, const Tensor& ten1)
 			unsigned out_idx = 0, ten0_idx = 0, ten1_idx = 0;
 			for (unsigned d = 0; d < counting_shape.dim(); d++)
 			{
-				out_idx += counting_shape[d] * out._stride[d];
-				ten0_idx += counting_shape[d] * ten0._stride[d];
-				ten1_idx += counting_shape[d] * ten1_summed._stride[d];
+				if (out._view[d] != 1) out_idx += counting_shape[d] * out._stride[d];
+				if (ten0._view[d] != 1) ten0_idx += counting_shape[d] * ten0._stride[d];
+				if (ten1_summed._view[d] != 1) ten1_idx += counting_shape[d] * ten1_summed._stride[d];
 			}
 
 			unsigned count = 0u;
 			while (count++ < vector_len)
 			{
-				out_data[out_idx] = ten0_data[ten0_idx] - ten1_data[ten1_idx];
+				out_data[out_idx] = ten0_data[ten0_idx] - ten1_summed_data[ten1_idx];
 				out_idx += dout, ten0_idx += dten0, ten1_idx += dten1;
 			}
 
@@ -2294,7 +2303,7 @@ Tensor operator-(const Tensor& ten0, const Tensor& ten1)
 
 	// If it was a gradient operation store a SubOp instance.
 	if (requires_grad)
-		out._internals->op = new SubOp(ten0, ten1_summed, out);
+		out._internals->op = new SubOp(ten0, ten1, out);
 
 	// Return out.
 	return out;
@@ -2360,23 +2369,24 @@ Tensor operator*(const Tensor& ten0, const Tensor& ten1)
 	// Create output with the same shape as first tensor.
 	Tensor out(ten0.shape(), ten0.device(), requires_grad);
 
-	// Sum dimensions on ten1 if necessary.
-	Tensor ten1_summed = ten1;
-	for (unsigned i = 0; i < ten0.dim(); i++)
-		if (ten0.size(i) == 1 && ten1_summed.size(i) != 1)
-			ten1_summed = ten1_summed.sum(i, true);
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten0_data = __dataof(ten0);
+	float* ten1_data = __dataof(ten1);
 
-	// Now we actually sum the tensors.
+	// Now we actually multiply the tensors.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::shaped_multiply(out_data, ten0_data, ten1_data, out._view, ten1._view);
 	else
 	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten0_data = __dataof(ten0);
-		float* ten1_data = __dataof(ten1_summed);
+		// Sum dimensions on ten1 if necessary.
+		Tensor ten1_summed = ten1.no_grad();
+		for (unsigned i = 0; i < ten0.dim(); i++)
+			if (ten0.size(i) == 1 && ten1_summed.size(i) != 1)
+				ten1_summed = ten1_summed.sum(i, true);
+
+		float* ten1_summed_data = __dataof(ten1_summed);
+
 		// Exptract the shapes.
 		Shape out_shape = out.shape();
 		Shape ten0_shape = ten0.shape();
@@ -2387,9 +2397,9 @@ Tensor operator*(const Tensor& ten0, const Tensor& ten1)
 			if (out_shape[i] > 1)
 				last_long_dim = i;
 		// Find the stride, will be 1 except for ten1 if broadcasting.
-		const unsigned dout = out._stride[last_long_dim];
-		const unsigned dten0 = ten0._stride[last_long_dim];
-		const unsigned dten1 = ten1_summed._stride[last_long_dim];
+		const unsigned dout = (out._view[last_long_dim] != 1) ? 1 : 0;
+		const unsigned dten0 = (ten0._view[last_long_dim] != 1) ? 1 : 0;
+		const unsigned dten1 = (ten1_summed._view[last_long_dim] != 1) ? 1 : 0;
 		// Find the vector length to iterate.
 		const unsigned vector_len = out_shape[last_long_dim];
 		// Create a running shape to count.
@@ -2400,15 +2410,15 @@ Tensor operator*(const Tensor& ten0, const Tensor& ten1)
 			unsigned out_idx = 0, ten0_idx = 0, ten1_idx = 0;
 			for (unsigned d = 0; d < counting_shape.dim(); d++)
 			{
-				out_idx += counting_shape[d] * out._stride[d];
-				ten0_idx += counting_shape[d] * ten0._stride[d];
-				ten1_idx += counting_shape[d] * ten1_summed._stride[d];
+				if (out._view[d] != 1) out_idx += counting_shape[d] * out._stride[d];
+				if (ten0._view[d] != 1) ten0_idx += counting_shape[d] * ten0._stride[d];
+				if (ten1_summed._view[d] != 1) ten1_idx += counting_shape[d] * ten1_summed._stride[d];
 			}
 
 			unsigned count = 0u;
 			while (count++ < vector_len)
 			{
-				out_data[out_idx] = ten0_data[ten0_idx] * ten1_data[ten1_idx];
+				out_data[out_idx] = ten0_data[ten0_idx] * ten1_summed_data[ten1_idx];
 				out_idx += dout, ten0_idx += dten0, ten1_idx += dten1;
 			}
 
@@ -2435,7 +2445,7 @@ Tensor operator*(const Tensor& ten0, const Tensor& ten1)
 
 	// If it was a gradient operation store a MulOp instance.
 	if (requires_grad)
-		out._internals->op = new MulOp(ten0, ten1_summed, out);
+		out._internals->op = new MulOp(ten0, ten1, out);
 
 	// Return out.
 	return out;
@@ -2501,23 +2511,24 @@ Tensor operator/(const Tensor& ten0, const Tensor& ten1)
 	// Create output with the same shape as first tensor.
 	Tensor out(ten0.shape(), ten0.device(), requires_grad);
 
-	// Sum dimensions on ten1 if necessary.
-	Tensor ten1_summed = ten1;
-	for (unsigned i = 0; i < ten0.dim(); i++)
-		if (ten0.size(i) == 1 && ten1_summed.size(i) != 1)
-			ten1_summed = ten1_summed.sum(i, true);
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten0_data = __dataof(ten0);
+	float* ten1_data = __dataof(ten1);
 
 	// Now we actually divide the tensors.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::shaped_divide(out_data, ten0_data, ten1_data, out._view, ten1._view);
 	else
 	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten0_data = __dataof(ten0);
-		float* ten1_data = __dataof(ten1_summed);
+		// Sum dimensions on ten1 if necessary.
+		Tensor ten1_summed = ten1.no_grad();
+		for (unsigned i = 0; i < ten0.dim(); i++)
+			if (ten0.size(i) == 1 && ten1_summed.size(i) != 1)
+				ten1_summed = ten1_summed.sum(i, true);
+
+		float* ten1_summed_data = __dataof(ten1_summed);
+
 		// Exptract the shapes.
 		Shape out_shape = out.shape();
 		Shape ten0_shape = ten0.shape();
@@ -2528,9 +2539,9 @@ Tensor operator/(const Tensor& ten0, const Tensor& ten1)
 			if (out_shape[i] > 1)
 				last_long_dim = i;
 		// Find the stride, will be 1 except for ten1 if broadcasting.
-		const unsigned dout = out._stride[last_long_dim];
-		const unsigned dten0 = ten0._stride[last_long_dim];
-		const unsigned dten1 = ten1_summed._stride[last_long_dim];
+		const unsigned dout = (out._view[last_long_dim] != 1) ? 1 : 0;
+		const unsigned dten0 = (ten0._view[last_long_dim] != 1) ? 1 : 0;
+		const unsigned dten1 = (ten1_summed._view[last_long_dim] != 1) ? 1 : 0;
 		// Find the vector length to iterate.
 		const unsigned vector_len = out_shape[last_long_dim];
 		// Create a running shape to count.
@@ -2541,15 +2552,15 @@ Tensor operator/(const Tensor& ten0, const Tensor& ten1)
 			unsigned out_idx = 0, ten0_idx = 0, ten1_idx = 0;
 			for (unsigned d = 0; d < counting_shape.dim(); d++)
 			{
-				out_idx += counting_shape[d] * out._stride[d];
-				ten0_idx += counting_shape[d] * ten0._stride[d];
-				ten1_idx += counting_shape[d] * ten1_summed._stride[d];
+				if (out._view[d] != 1) out_idx += counting_shape[d] * out._stride[d];
+				if (ten0._view[d] != 1) ten0_idx += counting_shape[d] * ten0._stride[d];
+				if (ten1_summed._view[d] != 1) ten1_idx += counting_shape[d] * ten1_summed._stride[d];
 			}
 
 			unsigned count = 0u;
 			while (count++ < vector_len)
 			{
-				out_data[out_idx] = ten0_data[ten0_idx] / ten1_data[ten1_idx];
+				out_data[out_idx] = ten0_data[ten0_idx] / ten1_summed_data[ten1_idx];
 				out_idx += dout, ten0_idx += dten0, ten1_idx += dten1;
 			}
 
@@ -2576,7 +2587,7 @@ Tensor operator/(const Tensor& ten0, const Tensor& ten1)
 
 	// If it was a gradient operation store a DivOp instance.
 	if (requires_grad)
-		out._internals->op = new DivOp(ten0, ten1_summed, out);
+		out._internals->op = new DivOp(ten0, ten1, out);
 
 	// Return out.
 	return out;
@@ -2613,16 +2624,15 @@ Tensor operator+(const Tensor& ten, float val)
 	// Create output with the same shape as tensor.
 	Tensor out(ten.shape(), ten.device(), ten.has_grad());
 
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten_data = __dataof(ten);
+
 	// Now we actually sum the tensors.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::add_scalar(out_data, ten_data, val, out.numel());
 	else
 	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten_data = __dataof(ten);
 		// Iterate through all elements.
 		int idx = -1, _numel = int(ten.numel());
 		while (++idx < _numel)
@@ -2676,16 +2686,15 @@ Tensor operator*(const Tensor& ten, float val)
 	// Create output with the same shape as tensor.
 	Tensor out(ten.shape(), ten.device(), ten.has_grad());
 
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten_data = __dataof(ten);
+
 	// Now we actually multiply the tensors.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::multiply_scalar(out_data, ten_data, val, out.numel());
 	else
 	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten_data = __dataof(ten);
 		// Iterate through all elements.
 		int idx = -1, _numel = int(ten.numel());
 		while (++idx < _numel)
@@ -2741,16 +2750,15 @@ Tensor operator-(float val, const Tensor& ten)
 	// Create output with the same shape as tensor.
 	Tensor out(ten.shape(), ten.device(), ten.has_grad());
 
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten_data = __dataof(ten);
+
 	// Now we actually subtract the tensors.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::subtract_from_scalar(out_data, ten_data, val, out.numel());
 	else
 	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten_data = __dataof(ten);
 		// Iterate through all elements.
 		int idx = -1, _numel = int(ten.numel());
 		while (++idx < _numel)
@@ -2801,16 +2809,15 @@ Tensor operator/(float val, const Tensor& ten)
 	// Create output with the same shape as tensor.
 	Tensor out(ten.shape(), ten.device(), ten.has_grad());
 
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten_data = __dataof(ten);
+
 	// Now we actually divide the tensors.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::divide_from_scalar(out_data, ten_data, val, out.numel());
 	else
 	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten_data = __dataof(ten);
 		// Iterate through all elements.
 		int idx = -1, _numel = int(ten.numel());
 		while (++idx < _numel)
@@ -2856,16 +2863,15 @@ Tensor Tensor::operator-() const
 	// Create output with the same shape as tensor.
 	Tensor out(shape(), device(), has_grad());
 
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten_data = __data;
+
 	// Now we actually negate the tensor.
 	if (out.is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::multiply_scalar(out_data, ten_data, -1.f, out.numel());
 	else
 	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten_data = __data;
 		// Iterate through all elements.
 		int idx = -1, _numel = int(numel());
 		while (++idx < _numel)
@@ -2927,71 +2933,65 @@ Tensor& Tensor::operator+=(const Tensor& other)
 			"Found shapes | Tensor0: %s | Tensor1: %s", _view.str(), other._view.str()
 		);
 
-	// Sum dimensions on ten1 if necessary.
-	Tensor other_summed = other.no_grad();
-	for (unsigned i = 0; i < dim(); i++)
-		if (size(i) == 1 && other_summed.size(i) != 1)
-			other_summed = other_summed.sum(i, true);
+	// Extract the data.
+	float* out_data = __data;
+	float* ten_data = __dataof(other);
 
 	// Now we actually sum the tensors.
 	if (is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::shaped_add(out_data, out_data, ten_data, _view, other._view);
 	else
 	{
-		// Extract the data.
-		float* out_data = __data;
-		float* oth_data = __dataof(other_summed);
-		// Exptract the shapes.
-		Shape out_shape = shape();
-		Shape oth_shape = other_summed.shape();
+		// Sum dimensions on other if necessary.
+		Tensor other_summed = other.no_grad();
+		for (unsigned i = 0; i < other.dim(); i++)
+			if (_view[i] == 1 && other_summed.size(i) != 1)
+				other_summed = other_summed.sum(i, true);
+
+		float* other_summed_data = __dataof(other_summed);
+
 		// Find the last non-unitary dimension to iterate through.
 		unsigned last_long_dim = 0;
-		for (unsigned i = 0; i < out_shape.dim(); i++)
-			if (out_shape[i] > 1)
+		for (unsigned i = 0; i < _view.dim(); i++)
+			if (_view[i] > 1)
 				last_long_dim = i;
 		// Find the stride, will be 1 except for ten1 if broadcasting.
-		const unsigned dout = _stride[last_long_dim];
-		const unsigned doth = other_summed._stride[last_long_dim];
+		const unsigned dout = (_view[last_long_dim] != 1) ? 1 : 0;
+		const unsigned dten = (other._view[last_long_dim] != 1) ? 1 : 0;
 		// Find the vector length to iterate.
-		const unsigned vector_len = out_shape[last_long_dim];
+		const unsigned vector_len = _view[last_long_dim];
 		// Create a running shape to count.
 		Shape counting_shape(last_long_dim, (int*)nullptr);
 		// Iterate through vectors.
 		while (true)
 		{
-			unsigned out_idx = 0, oth_idx = 0;
+			unsigned out_idx = 0, ten_idx = 0;
 			for (unsigned d = 0; d < counting_shape.dim(); d++)
 			{
-				out_idx += counting_shape[d] * _stride[d];
-				oth_idx += counting_shape[d] * other_summed._stride[d];
+				if (_view[d] != 1) out_idx += counting_shape[d] * _stride[d];
+				if (other_summed._view[d] != 1) ten_idx += counting_shape[d] * other_summed._stride[d];
 			}
 
-			unsigned count = 0u;
-			while (count++ < vector_len)
+			for(unsigned count = 0u;count < vector_len; count++)
 			{
-				out_data[out_idx] += oth_data[oth_idx];
-				out_idx += dout, oth_idx += doth;
+				out_data[out_idx] += other_summed_data[ten_idx];
+				out_idx += dout, ten_idx += dten;
 			}
 
-			if (counting_shape.dim())
-			{
-				counting_shape[last_long_dim - 1]++;
+			if (!counting_shape.dim())
+				break;
 
-				for (int d = last_long_dim - 1; d > 0; d--)
+			counting_shape[last_long_dim - 1]++;
+			for (int d = last_long_dim - 1; d > 0; d--)
+			{
+				if (counting_shape[d] >= _view[d])
 				{
-					if (counting_shape[d] >= out_shape[d])
-					{
-						counting_shape[d] -= out_shape[d];
-						counting_shape[d - 1]++;
-					}
+					counting_shape[d] -= _view[d];
+					counting_shape[d - 1]++;
 				}
-				// If you reach the end of the leading dimension you're done.
-				if (counting_shape[0] >= out_shape[0])
-					break;
 			}
-			else
+			// If you reach the end of the leading dimension you're done.
+			if (counting_shape[0] >= _view[0])
 				break;
 		}
 	}
@@ -3041,71 +3041,65 @@ Tensor& Tensor::operator-=(const Tensor& other)
 			"Found shapes | Tensor0: %s | Tensor1: %s", _view.str(), other._view.str()
 		);
 
-	// Sum dimensions on ten1 if necessary.
-	Tensor other_summed = other.no_grad();
-	for (unsigned i = 0; i < dim(); i++)
-		if (size(i) == 1 && other_summed.size(i) != 1)
-			other_summed = other_summed.sum(i, true);
+	// Extract the data.
+	float* out_data = __data;
+	float* ten_data = __dataof(other);
 
 	// Now we actually subtract the tensors.
 	if (is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::shaped_subtract(out_data, out_data, ten_data, _view, other._view);
 	else
 	{
-		// Extract the data.
-		float* out_data = __data;
-		float* oth_data = __dataof(other_summed);
-		// Exptract the shapes.
-		Shape out_shape = shape();
-		Shape oth_shape = other_summed.shape();
+		// Sum dimensions on other if necessary.
+		Tensor other_summed = other.no_grad();
+		for (unsigned i = 0; i < other.dim(); i++)
+			if (_view[i] == 1 && other_summed.size(i) != 1)
+				other_summed = other_summed.sum(i, true);
+
+		float* other_summed_data = __dataof(other_summed);
+
 		// Find the last non-unitary dimension to iterate through.
 		unsigned last_long_dim = 0;
-		for (unsigned i = 0; i < out_shape.dim(); i++)
-			if (out_shape[i] > 1)
+		for (unsigned i = 0; i < _view.dim(); i++)
+			if (_view[i] > 1)
 				last_long_dim = i;
 		// Find the stride, will be 1 except for ten1 if broadcasting.
-		const unsigned dout = _stride[last_long_dim];
-		const unsigned doth = other_summed._stride[last_long_dim];
+		const unsigned dout = (_view[last_long_dim] != 1) ? 1 : 0;
+		const unsigned dten = (other._view[last_long_dim] != 1) ? 1 : 0;
 		// Find the vector length to iterate.
-		const unsigned vector_len = out_shape[last_long_dim];
+		const unsigned vector_len = _view[last_long_dim];
 		// Create a running shape to count.
 		Shape counting_shape(last_long_dim, (int*)nullptr);
 		// Iterate through vectors.
 		while (true)
 		{
-			unsigned out_idx = 0, oth_idx = 0;
+			unsigned out_idx = 0, ten_idx = 0;
 			for (unsigned d = 0; d < counting_shape.dim(); d++)
 			{
-				out_idx += counting_shape[d] * _stride[d];
-				oth_idx += counting_shape[d] * other_summed._stride[d];
+				if (_view[d] != 1) out_idx += counting_shape[d] * _stride[d];
+				if (other_summed._view[d] != 1) ten_idx += counting_shape[d] * other_summed._stride[d];
 			}
 
-			unsigned count = 0u;
-			while (count++ < vector_len)
+			for (unsigned count = 0u; count < vector_len; count++)
 			{
-				out_data[out_idx] -= oth_data[oth_idx];
-				out_idx += dout, oth_idx += doth;
+				out_data[out_idx] -= other_summed_data[ten_idx];
+				out_idx += dout, ten_idx += dten;
 			}
 
-			if (counting_shape.dim())
-			{
-				counting_shape[last_long_dim - 1]++;
+			if (!counting_shape.dim())
+				break;
 
-				for (int d = last_long_dim - 1; d > 0; d--)
+			counting_shape[last_long_dim - 1]++;
+			for (int d = last_long_dim - 1; d > 0; d--)
+			{
+				if (counting_shape[d] >= _view[d])
 				{
-					if (counting_shape[d] >= out_shape[d])
-					{
-						counting_shape[d] -= out_shape[d];
-						counting_shape[d - 1]++;
-					}
+					counting_shape[d] -= _view[d];
+					counting_shape[d - 1]++;
 				}
-				// If you reach the end of the leading dimension you're done.
-				if (counting_shape[0] >= out_shape[0])
-					break;
 			}
-			else
+			// If you reach the end of the leading dimension you're done.
+			if (counting_shape[0] >= _view[0])
 				break;
 		}
 	}
@@ -3155,71 +3149,65 @@ Tensor& Tensor::operator*=(const Tensor& other)
 			"Found shapes | Tensor0: %s | Tensor1: %s", _view.str(), other._view.str()
 		);
 
-	// Sum dimensions on ten1 if necessary.
-	Tensor other_summed = other.no_grad();
-	for (unsigned i = 0; i < dim(); i++)
-		if (size(i) == 1 && other_summed.size(i) != 1)
-			other_summed = other_summed.sum(i, true);
+	// Extract the data.
+	float* out_data = __data;
+	float* ten_data = __dataof(other);
 
-	// Now we actually sum the tensors.
+	// Now we actually multiply the tensors.
 	if (is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::shaped_multiply(out_data, out_data, ten_data, _view, other._view);
 	else
 	{
-		// Extract the data.
-		float* out_data = __data;
-		float* oth_data = __dataof(other_summed);
-		// Exptract the shapes.
-		Shape out_shape = shape();
-		Shape oth_shape = other_summed.shape();
+		// Sum dimensions on other if necessary.
+		Tensor other_summed = other.no_grad();
+		for (unsigned i = 0; i < other.dim(); i++)
+			if (_view[i] == 1 && other_summed.size(i) != 1)
+				other_summed = other_summed.sum(i, true);
+
+		float* other_summed_data = __dataof(other_summed);
+
 		// Find the last non-unitary dimension to iterate through.
 		unsigned last_long_dim = 0;
-		for (unsigned i = 0; i < out_shape.dim(); i++)
-			if (out_shape[i] > 1)
+		for (unsigned i = 0; i < _view.dim(); i++)
+			if (_view[i] > 1)
 				last_long_dim = i;
 		// Find the stride, will be 1 except for ten1 if broadcasting.
-		const unsigned dout = _stride[last_long_dim];
-		const unsigned doth = other_summed._stride[last_long_dim];
+		const unsigned dout = (_view[last_long_dim] != 1) ? 1 : 0;
+		const unsigned dten = (other._view[last_long_dim] != 1) ? 1 : 0;
 		// Find the vector length to iterate.
-		const unsigned vector_len = out_shape[last_long_dim];
+		const unsigned vector_len = _view[last_long_dim];
 		// Create a running shape to count.
 		Shape counting_shape(last_long_dim, (int*)nullptr);
 		// Iterate through vectors.
 		while (true)
 		{
-			unsigned out_idx = 0, oth_idx = 0;
+			unsigned out_idx = 0, ten_idx = 0;
 			for (unsigned d = 0; d < counting_shape.dim(); d++)
 			{
-				out_idx += counting_shape[d] * _stride[d];
-				oth_idx += counting_shape[d] * other_summed._stride[d];
+				if (_view[d] != 1) out_idx += counting_shape[d] * _stride[d];
+				if (other_summed._view[d] != 1) ten_idx += counting_shape[d] * other_summed._stride[d];
 			}
 
-			unsigned count = 0u;
-			while (count++ < vector_len)
+			for (unsigned count = 0u; count < vector_len; count++)
 			{
-				out_data[out_idx] *= oth_data[oth_idx];
-				out_idx += dout, oth_idx += doth;
+				out_data[out_idx] *= other_summed_data[ten_idx];
+				out_idx += dout, ten_idx += dten;
 			}
 
-			if (counting_shape.dim())
-			{
-				counting_shape[last_long_dim - 1]++;
+			if (!counting_shape.dim())
+				break;
 
-				for (int d = last_long_dim - 1; d > 0; d--)
+			counting_shape[last_long_dim - 1]++;
+			for (int d = last_long_dim - 1; d > 0; d--)
+			{
+				if (counting_shape[d] >= _view[d])
 				{
-					if (counting_shape[d] >= out_shape[d])
-					{
-						counting_shape[d] -= out_shape[d];
-						counting_shape[d - 1]++;
-					}
+					counting_shape[d] -= _view[d];
+					counting_shape[d - 1]++;
 				}
-				// If you reach the end of the leading dimension you're done.
-				if (counting_shape[0] >= out_shape[0])
-					break;
 			}
-			else
+			// If you reach the end of the leading dimension you're done.
+			if (counting_shape[0] >= _view[0])
 				break;
 		}
 	}
@@ -3269,71 +3257,65 @@ Tensor& Tensor::operator/=(const Tensor& other)
 			"Found shapes | Tensor0: %s | Tensor1: %s", _view.str(), other._view.str()
 		);
 
-	// Sum dimensions on ten1 if necessary.
-	Tensor other_summed = other.no_grad();
-	for (unsigned i = 0; i < dim(); i++)
-		if (size(i) == 1 && other_summed.size(i) != 1)
-			other_summed = other_summed.sum(i, true);
+	// Extract the data.
+	float* out_data = __data;
+	float* ten_data = __dataof(other);
 
 	// Now we actually divide the tensors.
 	if (is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::shaped_divide(out_data, out_data, ten_data, _view, other._view);
 	else
 	{
-		// Extract the data.
-		float* out_data = __data;
-		float* oth_data = __dataof(other_summed);
-		// Exptract the shapes.
-		Shape out_shape = shape();
-		Shape oth_shape = other_summed.shape();
+		// Sum dimensions on other if necessary.
+		Tensor other_summed = other.no_grad();
+		for (unsigned i = 0; i < other.dim(); i++)
+			if (_view[i] == 1 && other_summed.size(i) != 1)
+				other_summed = other_summed.sum(i, true);
+
+		float* other_summed_data = __dataof(other_summed);
+
 		// Find the last non-unitary dimension to iterate through.
 		unsigned last_long_dim = 0;
-		for (unsigned i = 0; i < out_shape.dim(); i++)
-			if (out_shape[i] > 1)
+		for (unsigned i = 0; i < _view.dim(); i++)
+			if (_view[i] > 1)
 				last_long_dim = i;
 		// Find the stride, will be 1 except for ten1 if broadcasting.
-		const unsigned dout = _stride[last_long_dim];
-		const unsigned doth = other_summed._stride[last_long_dim];
+		const unsigned dout = (_view[last_long_dim] != 1) ? 1 : 0;
+		const unsigned dten = (other._view[last_long_dim] != 1) ? 1 : 0;
 		// Find the vector length to iterate.
-		const unsigned vector_len = out_shape[last_long_dim];
+		const unsigned vector_len = _view[last_long_dim];
 		// Create a running shape to count.
 		Shape counting_shape(last_long_dim, (int*)nullptr);
 		// Iterate through vectors.
 		while (true)
 		{
-			unsigned out_idx = 0, oth_idx = 0;
+			unsigned out_idx = 0, ten_idx = 0;
 			for (unsigned d = 0; d < counting_shape.dim(); d++)
 			{
-				out_idx += counting_shape[d] * _stride[d];
-				oth_idx += counting_shape[d] * other_summed._stride[d];
+				if (_view[d] != 1) out_idx += counting_shape[d] * _stride[d];
+				if (other_summed._view[d] != 1) ten_idx += counting_shape[d] * other_summed._stride[d];
 			}
 
-			unsigned count = 0u;
-			while (count++ < vector_len)
+			for (unsigned count = 0u; count < vector_len; count++)
 			{
-				out_data[out_idx] /= oth_data[oth_idx];
-				out_idx += dout, oth_idx += doth;
+				out_data[out_idx] /= other_summed_data[ten_idx];
+				out_idx += dout, ten_idx += dten;
 			}
 
-			if (counting_shape.dim())
-			{
-				counting_shape[last_long_dim - 1]++;
+			if (!counting_shape.dim())
+				break;
 
-				for (int d = last_long_dim - 1; d > 0; d--)
+			counting_shape[last_long_dim - 1]++;
+			for (int d = last_long_dim - 1; d > 0; d--)
+			{
+				if (counting_shape[d] >= _view[d])
 				{
-					if (counting_shape[d] >= out_shape[d])
-					{
-						counting_shape[d] -= out_shape[d];
-						counting_shape[d - 1]++;
-					}
+					counting_shape[d] -= _view[d];
+					counting_shape[d - 1]++;
 				}
-				// If you reach the end of the leading dimension you're done.
-				if (counting_shape[0] >= out_shape[0])
-					break;
 			}
-			else
+			// If you reach the end of the leading dimension you're done.
+			if (counting_shape[0] >= _view[0])
 				break;
 		}
 	}
@@ -3360,15 +3342,14 @@ Tensor& Tensor::operator+=(float val)
 		"Trying to add two tensors while the first tensor is empty."
 	);
 
-	// Now we actually sum the tensors.
+	// Extract the data.
+	float* out_data = __data;
+
+	// Now we actually sum the tensor.
 	if (is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::add_scalar(out_data, out_data, val, numel());
 	else
 	{
-		// Extract the data.
-		float* out_data = __data;
 		// Iterate through all elements.
 		int idx = -1, _numel = int(numel());
 		while (++idx < _numel)
@@ -3400,15 +3381,14 @@ Tensor& Tensor::operator*=(float val)
 		"Trying to multiply by a scalar on an empty tensor."
 	);
 
+	// Extract the data.
+	float* out_data = __data;
+
 	// Now we actually multiply the tensors.
 	if (is_gpu())
-	{
-		TENSOR_ERROR("CUDA backend not implemented yet.");
-	}
+		kernel_ops::multiply_scalar(out_data, out_data, val, numel());
 	else
 	{
-		// Extract the data.
-		float* out_data = __data;
 		// Iterate through all elements.
 		int idx = -1, _numel = int(numel());
 		while (++idx < _numel)
@@ -3524,7 +3504,7 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1)
 
 	// Now we actually multiply the matrices.
 	if (out.is_gpu())
-		kernel_ops::matmul(out_data, A_data, B_data, A._view, B._view);
+		kernel_ops::matmul(out_data, A_data, B_data, out_shape, A._view, B._view);
 	else
 	{
 		// Create a running shape to count.
@@ -3724,7 +3704,7 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& 
 
 	// Now we actually multiply the matrices.
 	if (out.is_gpu())
-		kernel_ops::matmul_bias(out_data, A_data, B_data, b_data, A._view, B._view, b._view);
+		kernel_ops::matmul_bias(out_data, A_data, B_data, b_data, out_shape, A._view, B._view, b._view);
 	else
 	{
 		// Get bias last dimensions strides.
@@ -4042,7 +4022,7 @@ Tensor Functional::mean_squared_error(const Tensor& ten0, const Tensor& ten1)
 	return out;
 }
 
-Tensor Functional::cross_entropy_loss(const Tensor& logits, unsigned* labels)
+Tensor Functional::cross_entropy_loss(const Tensor& logits, const VectorInt& labels)
 {
 	// Cross-Entropy tensor operator for backpropagation.
 	class CelOp : public Tensor::TensorInternals::TensorOp
@@ -4058,8 +4038,8 @@ Tensor Functional::cross_entropy_loss(const Tensor& logits, unsigned* labels)
 
 	public:
 		// Constructor, stores all the data of the operation.
-		CelOp(const Tensor& _logits, const Tensor& _probs, const Tensor& _out, unsigned* _labels) : TensorOp{ "Cross-Entropy Loss", _out },
-			logits{ _logits }, probs{ _probs }, labels{ Functional::one_hot(_logits.shape(), _labels, _logits.device()) }, size{ _logits.size(0) }
+		CelOp(const Tensor& _logits, const Tensor& _probs, const Tensor& _out, const VectorInt& _labels) : TensorOp{ "Cross-Entropy Loss", _out },
+			logits{ _logits }, probs{ _probs }, labels{ Functional::one_hot(_logits.shape(), _labels) }, size{ _logits.size(0) }
 		{
 			_relatives[0] = &logits;
 		}
@@ -4121,7 +4101,7 @@ Tensor Functional::cross_entropy_loss(const Tensor& logits, unsigned* labels)
 			float* p_probs = probs_data + i * n_labels;
 			float* p_logits = logits_data + i * n_labels;
 			
-			TENSOR_CHECK(labels[i] < n_labels, 
+			TENSOR_CHECK(labels[i] < (int)n_labels && labels[i] >= 0,
 				"Label out of range found inside cross-entropy loss computation.\n"
 				"Make sure your labels are in the range [0, logits.size(-1) - 1]."
 			);
@@ -4157,7 +4137,7 @@ Tensor Functional::cross_entropy_loss(const Tensor& logits, unsigned* labels)
 	return out;
 }
 
-Tensor Functional::negative_log_likelihood(const Tensor& probs, unsigned* labels)
+Tensor Functional::negative_log_likelihood(const Tensor& probs, const VectorInt& labels)
 {
 	// NLL tensor operator for backpropagation.
 	class NllOp : public Tensor::TensorInternals::TensorOp
@@ -4170,8 +4150,8 @@ Tensor Functional::negative_log_likelihood(const Tensor& probs, unsigned* labels
 
 	public:
 		// Constructor, stores all the data of the operation.
-		NllOp(const Tensor& _probs, const Tensor& _out, unsigned* _labels) : TensorOp{ "Negative Log Likelihood", _out },
-			probs{ _probs }, labels{ Functional::one_hot(_probs.shape(), _labels, _probs.device()) }, size{ _probs.size(0) }
+		NllOp(const Tensor& _probs, const Tensor& _out, const VectorInt& _labels) : TensorOp{ "Negative Log Likelihood", _out },
+			probs{ _probs }, labels{ Functional::one_hot(_probs.shape(), _labels) }, size{ _probs.size(0) }
 		{
 			_relatives[0] = &probs;
 		}
@@ -4226,7 +4206,7 @@ Tensor Functional::negative_log_likelihood(const Tensor& probs, unsigned* labels
 		// Add all loss values.
 		for (unsigned i = 0; i < size; i++)
 		{
-			TENSOR_CHECK(labels[i] < n_labels,
+			TENSOR_CHECK(labels[i] < (int)n_labels && labels[i] >= 0,
 				"Label out of range found inside negative log likelihood computation.\n"
 				"Make sure your labels are in the range [0, probs.size(-1) - 1]."
 			);
@@ -4245,7 +4225,7 @@ Tensor Functional::negative_log_likelihood(const Tensor& probs, unsigned* labels
 	return out;
 }
 
-Tensor Functional::one_hot(const Shape& shape, unsigned* labels, const char* device)
+Tensor Functional::one_hot(const Shape& shape, const VectorInt& labels)
 {
 	// Size must be correct.
 	TENSOR_CHECK(shape.dim() == 2,
@@ -4261,7 +4241,7 @@ Tensor Functional::one_hot(const Shape& shape, unsigned* labels, const char* dev
 	);
 
 	// Create output tensor.
-	Tensor out(shape, device, false);
+	Tensor out(shape, labels.device(), false);
 
 	// Now we one-hot these vectors.
 	if (out.is_gpu())
@@ -4278,7 +4258,7 @@ Tensor Functional::one_hot(const Shape& shape, unsigned* labels, const char* dev
 		// One-hot this.
 		for (unsigned i = 0; i < n_cases; i++)
 		{
-			TENSOR_CHECK(labels[i] < n_labels,
+			TENSOR_CHECK(labels[i] < (int)n_labels && labels[i] >= 0,
 				"Label out of range found inside a one-hot encoding.\n"
 				"Make sure your labels are in the range [0, shape(-1) - 1]."
 			);
@@ -4366,10 +4346,20 @@ void Random::set_cuda_seed(unsigned long long seed)
 
 // Uses a randomizer to generate a shuffled set of integers from 0 to size.
 
-void Random::shuffle(unsigned size, int* data)
+void Random::shuffle(VectorInt& values)
 {
+	unsigned len = values.len();
+	int* data = values.data();
+
+	if (len <= 1)
+		return;
+
+	if (values.is_gpu())
+		kernel_ops::shuffle(data, len);
+
 	// Fisher–Yates
-	for (unsigned i = size; i > 1; --i) {
+	else for (unsigned i = len; i > 1; --i) 
+	{
 		unsigned j = (unsigned)(splitmix() % i); // 0..i-1
 		int tmp = data[i - 1];
 		data[i - 1] = data[j];

@@ -38,27 +38,23 @@ namespace kernel_ops
 {
 	void set_scalar(void* out_data, float val, size_t num_elements);
 
-	void add_scalar(void* out_data, float val, size_t num_elements);
+	void add_scalar(void* out_data, const void* ten_data, float val, size_t num_elements);
 
-	void add_tensor(void* out_data, const void* sum_data, size_t num_elements);
+	void add_tensor(void* out_data, const void* sum0_data, const void* sum1_data, size_t num_elements);
 
-	void add_tensor_tensor(void* out_data, const void* sum0_data, const void* sum1_data, size_t num_elements);
+	void multiply_scalar(void* out_data, const void* fac_data, float val, size_t num_elements);
 
-	void multiply_scalar(void* out_data, float val, size_t num_elements);
+	void multiply_tensor(void* out_data, const void* fac0_data, const void* fac1_data, size_t num_elements);
 
-	void multiply_tensor(void* out_data, const void* fac_data, size_t num_elements);
+	void subtract_from_scalar(void* out_data, const void* sub_data, float val, size_t num_elements);
 
-	void multiply_tensor_tensor(void* out_data, const void* fac0_data, const void* fac1_data, size_t num_elements);
+	void divide_from_scalar(void* out_data, const void* den_data, float val, size_t num_elements);
 
 	void add_multiply_scalar_tensor(void* out_data, float val, const void* fac_data, size_t num_elements);
 
-	void subtract_tensor(void* out_data, const void* sub_data, size_t num_elements);
+	void subtract_tensor(void* out_data, const void* sum_data, const void* sub_data, size_t num_elements);
 
-	void subtract_tensor_tensor(void* out_data, const void* sum_data, const void* sub_data, size_t num_elements);
-
-	void divide_tensor(void* out_data, const void* den_data, size_t num_elements);
-
-	void divide_tensor_tensor(void* out_data, const void* num_data, const void* den_data, size_t num_elements);
+	void divide_tensor(void* out_data, const void* num_data, const void* den_data, size_t num_elements);
 
 	// --- Element-Wise Operators ---
 
@@ -79,6 +75,8 @@ namespace kernel_ops
 	void set_seed(size_t seed);
 	void normal(void* data_ptr, float mean, float std, size_t num_elements);
 	void uniform(void* data_ptr, float min, float max, size_t num_elements);
+	void shuffle(void* values, size_t length);
+	void arange(void* data_ptr, int a, int stride, size_t count);
 
 	// --- Row-Wise Operators ---
 
@@ -97,9 +95,16 @@ namespace kernel_ops
 
 	// --- Functional Namespace ---
 
-	void matmul(void* out_data, const void* A_data, const void* B_data, const Shape& A_shape, const Shape& B_shape);
-	void matmul_bias(void* out_data, const void* A_data, const void* B_data, const void* bias, const Shape& A_shape, const Shape& B_shape, const Shape& bias_shape);
+	void matmul(void* out_data, const void* A_data, const void* B_data, const Shape& out_shape, const Shape& A_shape, const Shape& B_shape);
+	void matmul_bias(void* out_data, const void* A_data, const void* B_data, const void* bias, const Shape& out_shape, const Shape& A_shape, const Shape& B_shape, const Shape& bias_shape);
 	void cat(void* out_data, const void* in0_data, const void* in1_data, size_t inner_size, size_t outer_size, int size0, int size1);
 	void mse(void* out_data, const void* x_data, const void* y_data, size_t num_elements);
 	void causal_mast(void* out_data, int L);
+
+	// --- Regular Operators ---
+
+	void shaped_add(void* out_data, const void* in0_data, const void* in1_data, const Shape& out_shape, const Shape& in_shape);
+	void shaped_subtract(void* out_data, const void* in0_data, const void* in1_data, const Shape& out_shape, const Shape& in_shape);
+	void shaped_multiply(void* out_data, const void* in0_data, const void* in1_data, const Shape& out_shape, const Shape& in_shape);
+	void shaped_divide(void* out_data, const void* in0_data, const void* in1_data, const Shape& out_shape, const Shape& in_shape);
 }
