@@ -85,8 +85,8 @@ public:
 class Tensor;
 namespace Functional
 {
-	Tensor matmul(const Tensor& mat0, const Tensor& mat1);
-	Tensor matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& bias);
+	Tensor matmul(const Tensor& mat0, const Tensor& mat1, bool transA = false, bool transB = false);
+	Tensor matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& bias, bool transA = false, bool transB = false);
 	Tensor cat(const Tensor& ten0, const Tensor& ten1, int dim);
 	Tensor mean_squared_error(const Tensor& ten0, const Tensor& ten1);
 	Tensor cross_entropy_loss(const Tensor& logits, const VectorInt& labels);
@@ -230,9 +230,9 @@ public:
 	// Returns a tensor containing the leading dimensions with the indices specified. Does not have grad.
 	Tensor operator[](const VectorInt& idxs) const;
 
-	void internal_add(float val);
-	void internal_multiply(float val);
-	void internal_set(float val);
+	void internal_add(const float* val, bool gpu = false, float factor = 1.f);
+	void internal_multiply(const float* val, bool gpu = false, float factor = 1.f);
+	void internal_set(const float* val, bool gpu = false, float factor = 1.f);
 
 	void internal_add(const Tensor& other);
 	void internal_add_prod(float val, const Tensor& other);
@@ -265,6 +265,7 @@ public:
 	Tensor subset(const Shape& shape, const Shape& start_indices) const;	// Returns a subset of the tensor with the specified shape starting from the specified indices.
 	Tensor modify(const Tensor& other, const Shape& start_indices) const;	// Returns a tensor with the same shape but with a subset substituted by the specified tensor.
 	Tensor repeat(int dim, unsigned repetitions) const;						// Returns a tensor with repeated dimensions of out_shape = shape * repetitions.
+	Tensor operator[](int i) const { return subset({1}, {i}).squeeze(0); }	// Returns a tensor corresponding to the i-th row of the leading dimension.
 
 	// --- Functions ---
 
@@ -285,6 +286,11 @@ public:
 	Tensor std(int dim, bool keepdim = false) const;
 	Tensor softmax(int dim) const;
 
+	Tensor max(int dim, bool keepdim = false) const;
+	Tensor min(int dim, bool keepdim = false) const;
+	VectorInt argmax(bool last_dim = true) const;
+	VectorInt argmin(bool last_dim = true) const;
+
 	// --- Regular operators ---
 
 	friend Tensor operator+(const Tensor& ten0, const Tensor& ten1);
@@ -304,6 +310,33 @@ public:
 
 	Tensor operator-() const;
 
+	// --- Comparissons ---
+	// These operators will return all boolean tensors, meaning tensors with zeros or 
+	// ones with the same shape as the first tensor, the second tensor must either have 
+	// the same shape or cleanly broadcast to the first one. The individual values depend 
+	// on individual comparissons between elements.
+
+	friend Tensor operator< (const Tensor& ten0, const Tensor& ten1);
+	friend Tensor operator> (const Tensor& ten0, const Tensor& ten1);
+	friend Tensor operator<=(const Tensor& ten0, const Tensor& ten1);
+	friend Tensor operator>=(const Tensor& ten0, const Tensor& ten1);
+	friend Tensor operator==(const Tensor& ten0, const Tensor& ten1);
+	friend Tensor operator!=(const Tensor& ten0, const Tensor& ten1);
+
+	friend Tensor operator< (const Tensor& ten, float val);
+	friend Tensor operator> (const Tensor& ten, float val);
+	friend Tensor operator<=(const Tensor& ten, float val);
+	friend Tensor operator>=(const Tensor& ten, float val);
+	friend Tensor operator==(const Tensor& ten, float val);
+	friend Tensor operator!=(const Tensor& ten, float val);
+
+	friend Tensor operator< (float val, const Tensor& ten);
+	friend Tensor operator> (float val, const Tensor& ten);
+	friend Tensor operator<=(float val, const Tensor& ten);
+	friend Tensor operator>=(float val, const Tensor& ten);
+	friend Tensor operator==(float val, const Tensor& ten);
+	friend Tensor operator!=(float val, const Tensor& ten);
+
 	// --- "In-place" operators ---
 	// In-place operators do not modify the data inside of them, instead they create a new
 	// tensor data and assign it to themselves, while the old data remains unchanged. That 
@@ -322,8 +355,8 @@ public:
 
 	// --- Friendzone ---
 
-	friend Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1);
-	friend Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& bias);
+	friend Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, bool transA, bool transB);
+	friend Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& bias, bool transA, bool transB);
 	friend Tensor Functional::cat(const Tensor& ten0, const Tensor& ten1, int dim);
 	friend Tensor Functional::mean_squared_error(const Tensor& ten0, const Tensor& ten1);
 	friend Tensor Functional::cross_entropy_loss(const Tensor& logits, const VectorInt& labels);

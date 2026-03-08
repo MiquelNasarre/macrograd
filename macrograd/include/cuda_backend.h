@@ -36,10 +36,10 @@ namespace cuda
 
 namespace kernel_ops
 {
-	void set_scalar(void* out_data, float val, size_t num_elements);
-	void add_scalar(void* out_data, const void* ten_data, float val, size_t num_elements);
+	void set_scalar(void* out_data, const float* val, size_t num_elements, bool is_gpu, float factor);
+	void add_scalar(void* out_data, const void* ten_data, const float* val, size_t num_elements, bool is_gpu, float factor);
 	void add_tensor(void* out_data, const void* sum0_data, const void* sum1_data, size_t num_elements);
-	void multiply_scalar(void* out_data, const void* fac_data, float val, size_t num_elements);
+	void multiply_scalar(void* out_data, const void* fac_data, const float* val, size_t num_elements, bool is_gpu, float factor);
 	void multiply_tensor(void* out_data, const void* fac0_data, const void* fac1_data, size_t num_elements);
 	void subtract_from_scalar(void* out_data, const void* sub_data, float val, size_t num_elements);
 	void divide_from_scalar(void* out_data, const void* den_data, float val, size_t num_elements);
@@ -80,6 +80,11 @@ namespace kernel_ops
 	void std(void* out_data, const void* in_data, int element_stride, int element_count, int rows);
 	void softmax(void* out_data, const void* in_data, int element_stride, int element_count, int rows);
 
+	void max(void* out_data, void* hot_data, const void* in_data, size_t rows, size_t element_count, size_t stride);
+	void min(void* out_data, void* hot_data, const void* in_data, size_t rows, size_t element_count, size_t stride);
+	void argmax(void* out_data, const void* in_data, size_t num_cases, size_t num_elements, size_t case_stride, size_t elem_stride);
+	void argmin(void* out_data, const void* in_data, size_t num_cases, size_t num_elements, size_t case_stride, size_t elem_stride);
+
 	// --- Shape modifiers ---
 
 	void transpose(void* out_data, const void* in_data, int A, int B, int outter_size, int middle_size, int inner_size, int in_stride, int out_stride);
@@ -89,8 +94,8 @@ namespace kernel_ops
 
 	// --- Functional Namespace ---
 
-	void matmul(void* out_data, const void* A_data, const void* B_data, const Shape& out_shape, const Shape& A_shape, const Shape& B_shape);
-	void matmul_bias(void* out_data, const void* A_data, const void* B_data, const void* bias, const Shape& out_shape, const Shape& A_shape, const Shape& B_shape, const Shape& bias_shape);
+	void matmul(void* out_data, const void* A_data, const void* B_data, const Shape& out_shape, const Shape& A_shape, const Shape& B_shape, bool transA, bool transB);
+	void matmul_bias(void* out_data, const void* A_data, const void* B_data, const void* bias, const Shape& out_shape, const Shape& A_shape, const Shape& B_shape, const Shape& bias_shape, bool transA, bool transB);
 	void cat(void* out_data, const void* in0_data, const void* in1_data, size_t inner_size, size_t outer_size, int size0, int size1);
 	void mse(void* out_data, const void* x_data, const void* y_data, size_t num_elements);
 	void cross_entropy_loss(void* out_data, void* probs_data, const void* logits_data, const void* labels_data, size_t num_cases, size_t num_classes);
@@ -104,4 +109,22 @@ namespace kernel_ops
 	void shaped_subtract(void* out_data, const void* in0_data, const void* in1_data, const Shape& out_shape, const Shape& in_shape);
 	void shaped_multiply(void* out_data, const void* in0_data, const void* in1_data, const Shape& out_shape, const Shape& in_shape);
 	void shaped_divide(void* out_data, const void* in0_data, const void* in1_data, const Shape& out_shape, const Shape& in_shape);
+
+	// --- Comparissons ---
+
+	void less_than_scalar(void* out_data, const void* in_data, float val, size_t num_elements);
+	void more_than_scalar(void* out_data, const void* in_data, float val, size_t num_elements);
+	void  leq_than_scalar(void* out_data, const void* in_data, float val, size_t num_elements);
+	void  meq_than_scalar(void* out_data, const void* in_data, float val, size_t num_elements);
+	void   eq_than_scalar(void* out_data, const void* in_data, float val, size_t num_elements);
+	void  neq_than_scalar(void* out_data, const void* in_data, float val, size_t num_elements);
+
+	void less_than(void* out_data, const void* in0_data, const void* in1_data, size_t numel0, size_t numel1);
+	void more_than(void* out_data, const void* in0_data, const void* in1_data, size_t numel0, size_t numel1);
+	void  leq_than(void* out_data, const void* in0_data, const void* in1_data, size_t numel0, size_t numel1);
+	void  meq_than(void* out_data, const void* in0_data, const void* in1_data, size_t numel0, size_t numel1);
+	void   eq_than(void* out_data, const void* in0_data, const void* in1_data, size_t numel0, size_t numel1);
+	void  neq_than(void* out_data, const void* in0_data, const void* in1_data, size_t numel0, size_t numel1);
+
+
 }

@@ -17,11 +17,13 @@
 --------------------------------------------------------------------------------------------------------------------------
 */
 
+constexpr int DEFAULT_BLOCK_SIZE = 256;
+
 // Macro for intellisense not to bother me with launch calls.
 #ifdef __INTELLISENSE__
 #define CUDA_LAUNCH(kernel, grid, block, ...) kernel(__VA_ARGS__)
 #else
-#define CUDA_LAUNCH(kernel, grid, block, ...) kernel<<<(grid), (block), 0, stream::get()>>>(__VA_ARGS__)
+#define CUDA_LAUNCH(kernel, grid, block, ...) kernel<<<(grid), (block), 0, stream::get()>>>(__VA_ARGS__);
 #endif
 
 #ifdef __INTELLISENSE__
@@ -30,6 +32,8 @@ inline float __expf(float x) { return expf(x); }
 inline float __logf(float x) { return logf(x); }
 inline void __syncthreads() {}
 inline void atomicAdd(float*, float) {}
+template<class T>
+inline T __shfl_down_sync(unsigned, T x, int) { return x; }
 #endif
 
 // Checks CUDA expression, if 'cudaError != cudaSuccess' raises a TENSOR_ERROR. 
@@ -161,6 +165,33 @@ void cuda::set_to_one(void* data_ptr)
 --------------------------------------------------------------------------------------------------------------------------
 */
 
+__global__ void set_gpu_scalar_kernel_vec(float4* out, const float* val, float factor, size_t num_vec)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+    float scalar = *val * factor;
+
+    for (size_t i = idx; i < num_vec; i += stride)
+    {
+        float4 ov;
+
+        ov.x = scalar;
+        ov.y = scalar;
+        ov.z = scalar;
+        ov.w = scalar;
+
+        out[i] = ov;
+    }
+}
+__global__ void set_gpu_scalar_kernel(float* out, const float* val, float factor, size_t num_elements)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+    float scalar = *val * factor;
+
+    for (size_t i = idx; i < num_elements; i += stride)
+        out[i] = scalar;
+}
 __global__ void set_scalar_kernel_vec(float4* out, float val, size_t num_vec)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -186,37 +217,92 @@ __global__ void set_scalar_kernel(float* out, float val, size_t num_elements)
     for (size_t i = idx; i < num_elements; i += stride)
         out[i] = val;
 }
-void kernel_ops::set_scalar(void* out_data, float val, size_t num_elements)
+void kernel_ops::set_scalar(void* out_data, const float* val, size_t num_elements, bool is_gpu, float factor)
 {
-    const int BLOCK_SIZE = 256;
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
-    // Vectorized addition
-    size_t num_vec = num_elements / 4;
-    if (num_vec)
+    if (is_gpu)
     {
-        CUDA_LAUNCH(set_scalar_kernel_vec, grid_size, BLOCK_SIZE,
-            (float4*)out_data,
-            val,
-            num_vec
-        );
-        CUDA_CHECK(cudaGetLastError());
+        // Vectorized addition
+        size_t num_vec = num_elements / 4;
+        if (num_vec)
+        {
+            CUDA_LAUNCH(set_gpu_scalar_kernel_vec, grid_size, BLOCK_SIZE,
+                (float4*)out_data,
+                val, factor,
+                num_vec
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+        // Remainder addition
+        size_t remainder = num_elements % 4;
+        if (remainder)
+        {
+            size_t offset = num_vec * 4;
+            CUDA_LAUNCH(set_gpu_scalar_kernel, grid_size, BLOCK_SIZE,
+                (float*)out_data + offset,
+                val, factor,
+                remainder
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
     }
-
-    // Remainder addition
-    size_t remainder = num_elements % 4;
-    if (remainder)
+    else
     {
-        size_t offset = num_vec * 4;
-        CUDA_LAUNCH(set_scalar_kernel, grid_size, BLOCK_SIZE,
-            (float*)out_data + offset,
-            val,
-            remainder
-        );
-        CUDA_CHECK(cudaGetLastError());
+        // Vectorized addition
+        size_t num_vec = num_elements / 4;
+        if (num_vec)
+        {
+            CUDA_LAUNCH(set_scalar_kernel_vec, grid_size, BLOCK_SIZE,
+                (float4*)out_data,
+                *val * factor,
+                num_vec
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+        // Remainder addition
+        size_t remainder = num_elements % 4;
+        if (remainder)
+        {
+            size_t offset = num_vec * 4;
+            CUDA_LAUNCH(set_scalar_kernel, grid_size, BLOCK_SIZE,
+                (float*)out_data + offset,
+                *val * factor,
+                remainder
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
     }
 }
 
+__global__ void add_gpu_scalar_kernel_vec(float4* out, const float4* in, const float* val, float factor, size_t num_vec)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+    float scalar = *val * factor;
+
+    for (size_t i = idx; i < num_vec; i += stride)
+    {
+        float4 ov = in[i];
+
+        ov.x += scalar;
+        ov.y += scalar;
+        ov.z += scalar;
+        ov.w += scalar;
+
+        out[i] = ov;
+    }
+}
+__global__ void add_gpu_scalar_kernel(float* out, const float* in, const float* val, float factor, size_t num_elements)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+    float scalar = *val * factor;
+
+    for (size_t i = idx; i < num_elements; i += stride)
+        out[i] = in[i] + scalar;
+}
 __global__ void add_scalar_kernel_vec(float4* out, const float4* in, float val, size_t num_vec)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -242,36 +328,66 @@ __global__ void add_scalar_kernel(float* out, const float* in, float val, size_t
     for (size_t i = idx; i < num_elements; i += stride)
         out[i] = in[i] + val;
 }
-void kernel_ops::add_scalar(void* out_data, const void* ten_data, float val, size_t num_elements)
+void kernel_ops::add_scalar(void* out_data, const void* ten_data, const float* val, size_t num_elements, bool is_gpu, float factor)
 {
-    const int BLOCK_SIZE = 256;
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
-    // Vectorized addition
-    size_t num_vec = num_elements / 4;
-    if (num_vec)
+    if (is_gpu)
     {
-        CUDA_LAUNCH(add_scalar_kernel_vec, grid_size, BLOCK_SIZE,
-            (float4*)out_data,
-            (const float4*)ten_data,
-            val,
-            num_vec
-        );
-        CUDA_CHECK(cudaGetLastError());
+        // Vectorized addition
+        size_t num_vec = num_elements / 4;
+        if (num_vec)
+        {
+            CUDA_LAUNCH(add_gpu_scalar_kernel_vec, grid_size, BLOCK_SIZE,
+                (float4*)out_data,
+                (const float4*)ten_data,
+                val, factor,
+                num_vec
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+        // Remainder addition
+        size_t remainder = num_elements % 4;
+        if (remainder)
+        {
+            size_t offset = num_vec * 4;
+            CUDA_LAUNCH(add_gpu_scalar_kernel, grid_size, BLOCK_SIZE,
+                (float*)out_data + offset,
+                (const float*)ten_data + offset,
+                val, factor,
+                remainder
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
     }
-
-    // Remainder addition
-    size_t remainder = num_elements % 4;
-    if (remainder)
+    else
     {
-        size_t offset = num_vec * 4;
-        CUDA_LAUNCH(add_scalar_kernel, grid_size, BLOCK_SIZE,
-            (float*)out_data + offset,
-            (const float*)ten_data + offset,
-            val,
-            remainder
-        );
-        CUDA_CHECK(cudaGetLastError());
+        // Vectorized addition
+        size_t num_vec = num_elements / 4;
+        if (num_vec)
+        {
+            CUDA_LAUNCH(add_scalar_kernel_vec, grid_size, BLOCK_SIZE,
+                (float4*)out_data,
+                (const float4*)ten_data,
+                *val * factor,
+                num_vec
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+        // Remainder addition
+        size_t remainder = num_elements % 4;
+        if (remainder)
+        {
+            size_t offset = num_vec * 4;
+            CUDA_LAUNCH(add_scalar_kernel, grid_size, BLOCK_SIZE,
+                (float*)out_data + offset,
+                (const float*)ten_data + offset,
+                *val * factor,
+                remainder
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
     }
 }
 
@@ -304,7 +420,7 @@ __global__ void add_tensor_kernel(float* out, const float* sum0, const float* su
 }
 void kernel_ops::add_tensor(void* out_data, const void* sum0_data, const void* sum1_data, size_t num_elements)
 {
-    const int BLOCK_SIZE = 256;
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     // Vectorized addition
@@ -335,6 +451,33 @@ void kernel_ops::add_tensor(void* out_data, const void* sum0_data, const void* s
     }
 }
 
+__global__ void multiply_gpu_scalar_kernel_vec(float4* out, const float4* in, const float* val, float factor, size_t num_vec)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+    float scalar = *val * factor;
+
+    for (size_t i = idx; i < num_vec; i += stride)
+    {
+        float4 iv = in[i];
+
+        iv.x = iv.x * scalar;
+        iv.y = iv.y * scalar;
+        iv.z = iv.z * scalar;
+        iv.w = iv.w * scalar;
+
+        out[i] = iv;
+    }
+}
+__global__ void multiply_gpu_scalar_kernel(float* out, const float* in, const float* val, float factor, size_t num_elements)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+    float scalar = *val * factor;
+
+    for (size_t i = idx; i < num_elements; i += stride)
+        out[i] = in[i] * scalar;
+}
 __global__ void multiply_scalar_kernel_vec(float4* out, const float4* in, float val, size_t num_vec)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -360,36 +503,66 @@ __global__ void multiply_scalar_kernel(float* out, const float* in, float val, s
     for (size_t i = idx; i < num_elements; i += stride)
         out[i] = in[i] * val;
 }
-void kernel_ops::multiply_scalar(void* out_data, const void* fac_data, float val, size_t num_elements)
+void kernel_ops::multiply_scalar(void* out_data, const void* fac_data, const float* val, size_t num_elements, bool is_gpu, float factor)
 {
-    const int BLOCK_SIZE = 256;
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
-    // Vectorized addition
-    size_t num_vec = num_elements / 4;
-    if (num_vec)
+    if (is_gpu)
     {
-        CUDA_LAUNCH(multiply_scalar_kernel_vec, grid_size, BLOCK_SIZE,
-            (float4*)out_data,
-            (const float4*)fac_data,
-            val,
-            num_vec
-        );
-        CUDA_CHECK(cudaGetLastError());
+        // Vectorized addition
+        size_t num_vec = num_elements / 4;
+        if (num_vec)
+        {
+            CUDA_LAUNCH(multiply_gpu_scalar_kernel_vec, grid_size, BLOCK_SIZE,
+                (float4*)out_data,
+                (const float4*)fac_data,
+                val, factor,
+                num_vec
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+        // Remainder addition
+        size_t remainder = num_elements % 4;
+        if (remainder)
+        {
+            size_t offset = num_vec * 4;
+            CUDA_LAUNCH(multiply_gpu_scalar_kernel, grid_size, BLOCK_SIZE,
+                (float*)out_data + offset,
+                (const float*)fac_data + offset,
+                val, factor,
+                remainder
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
     }
-
-    // Remainder addition
-    size_t remainder = num_elements % 4;
-    if (remainder)
+    else
     {
-        size_t offset = num_vec * 4;
-        CUDA_LAUNCH(multiply_scalar_kernel, grid_size, BLOCK_SIZE,
-            (float*)out_data + offset,
-            (const float*)fac_data + offset,
-            val,
-            remainder
-        );
-        CUDA_CHECK(cudaGetLastError());
+        // Vectorized addition
+        size_t num_vec = num_elements / 4;
+        if (num_vec)
+        {
+            CUDA_LAUNCH(multiply_scalar_kernel_vec, grid_size, BLOCK_SIZE,
+                (float4*)out_data,
+                (const float4*)fac_data,
+                *val * factor,
+                num_vec
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+        // Remainder addition
+        size_t remainder = num_elements % 4;
+        if (remainder)
+        {
+            size_t offset = num_vec * 4;
+            CUDA_LAUNCH(multiply_scalar_kernel, grid_size, BLOCK_SIZE,
+                (float*)out_data + offset,
+                (const float*)fac_data + offset,
+                *val * factor,
+                remainder
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
     }
 }
 
@@ -422,7 +595,7 @@ __global__ void multiply_tensor_kernel(float* out, const float* fac0, const floa
 }
 void kernel_ops::multiply_tensor(void* out_data, const void* fac0_data, const void* fac1_data, size_t num_elements)
 {
-    const int BLOCK_SIZE = 256;
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     // Vectorized addition
@@ -480,7 +653,7 @@ __global__ void subtract_from_scalar_kernel(float* out, const float* in, float v
 }
 void kernel_ops::subtract_from_scalar(void* out_data, const void* sub_data, float val, size_t num_elements)
 {
-    const int BLOCK_SIZE = 256;
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     // Vectorized addition
@@ -538,7 +711,7 @@ __global__ void divide_from_scalar_kernel(float* out, const float* in, float val
 }
 void kernel_ops::divide_from_scalar(void* out_data, const void* den_data, float val, size_t num_elements)
 {
-    const int BLOCK_SIZE = 256;
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     // Vectorized addition
@@ -597,7 +770,7 @@ __global__ void add_multiply_scalar_tensor_kernel(float* out, float val, const f
 }
 void kernel_ops::add_multiply_scalar_tensor(void* out_data, float val, const void* fac_data, size_t num_elements)
 {
-    const int BLOCK_SIZE = 256;
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     // Vectorized addition
@@ -655,7 +828,7 @@ __global__ void subtract_tensor_kernel(float* out, const float* sum, const float
 }
 void kernel_ops::subtract_tensor(void* out_data, const void* sum_data, const void* sub_data, size_t num_elements)
 {
-    const int BLOCK_SIZE = 256;
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     // Vectorized addition
@@ -715,7 +888,7 @@ __global__ void divide_tensor_kernel(float* out, const float* num, const float* 
 }
 void kernel_ops::divide_tensor(void* out_data, const void* num_data, const void* den_data, size_t num_elements)
 {
-    const int BLOCK_SIZE = 256;
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     // Vectorized addition
@@ -804,9 +977,9 @@ __global__ void tensor_bracket_op_kernel(float* out, const float* ten, const int
 }
 void kernel_ops::tensor_bracket_op(void* out_data, const void* ten_data, const void* indices_data, size_t num_indices, size_t stride, size_t range)
 {
-    const int BLOCK_SIZE = 256;
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
 
-    bool use_single = (stride <= 64) && (num_indices >= 4 * device::sm_count() * 256);
+    bool use_single = (stride <= 64) && (num_indices >= 4 * device::sm_count() * DEFAULT_BLOCK_SIZE);
     bool can_vec = (stride % 4 == 0);
 
     if (use_single) 
@@ -878,7 +1051,7 @@ __global__ void vector_bracket_op_kernel(int* __restrict__ out, const int* vec, 
 }
 void kernel_ops::vector_bracket_op(void* out_data, const void* vec_data, const void* indices_data, size_t num_indices, size_t range)
 {
-    const int BLOCK_SIZE = 256;
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     CUDA_LAUNCH(vector_bracket_op_kernel, grid_size, BLOCK_SIZE,
@@ -905,10 +1078,10 @@ __global__ void sign_kernel_vec(float4* __restrict__ out, const float4* __restri
     {
         float4 v = in[i];
 
-        v.x = (v.x > 0.0f);
-        v.y = (v.y > 0.0f);
-        v.z = (v.z > 0.0f);
-        v.w = (v.w > 0.0f);
+        v.x = (v.x > 0.0f) ? 1.f : (v.x < 0.0f) ? -1.f : 0.f;
+        v.y = (v.y > 0.0f) ? 1.f : (v.y < 0.0f) ? -1.f : 0.f;
+        v.z = (v.z > 0.0f) ? 1.f : (v.z < 0.0f) ? -1.f : 0.f;
+        v.w = (v.w > 0.0f) ? 1.f : (v.w < 0.0f) ? -1.f : 0.f;
 
         out[i] = v;
     }
@@ -919,11 +1092,11 @@ __global__ void sign_kernel(float* __restrict__ out, const float* __restrict__ i
     size_t stride = blockDim.x * gridDim.x;
 
     for (size_t i = idx; i < num_elements; i += stride)
-        out[i] = (in[i] > 0.0f);
+        out[i] = (in[i] > 0.0f) ? 1.f : (in[i] < 0.0f) ? -1.f : 0.f;
 }
 void kernel_ops::sign(void* out_data, const void* in_data, size_t num_elements)
 {
-    const int BLOCK_SIZE = 256;
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     // Vectorized addition
@@ -979,7 +1152,7 @@ __global__ void exp_kernel(float* __restrict__ out, const float* __restrict__ in
 }
 void kernel_ops::exp(void* out_data, const void* in_data, size_t num_elements)
 {
-    const int BLOCK_SIZE = 256;
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     // Vectorized addition
@@ -1035,7 +1208,7 @@ __global__ void log_kernel(float* __restrict__ out, const float* __restrict__ in
 }
 void kernel_ops::log(void* out_data, const void* in_data, size_t num_elements)
 {
-    const int BLOCK_SIZE = 256;
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     // Vectorized addition
@@ -1091,7 +1264,7 @@ __global__ void relu_kernel(float* __restrict__ out, const float* __restrict__ i
 }
 void kernel_ops::relu(void* out_data, const void* in_data, size_t num_elements)
 {
-    const int BLOCK_SIZE = 256;
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     // Vectorized addition
@@ -1147,7 +1320,7 @@ __global__ void silu_kernel(float* __restrict__ out, const float* __restrict__ i
 }
 void kernel_ops::silu(void* out_data, const void* in_data, size_t num_elements)
 {
-    const int BLOCK_SIZE = 256;
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     // Vectorized addition
@@ -1203,7 +1376,7 @@ __global__ void gelu_kernel(float* __restrict__ out, const float* __restrict__ i
 }
 void kernel_ops::gelu(void* out_data, const void* in_data, size_t num_elements)
 {
-    const int BLOCK_SIZE = 256;
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     // Vectorized addition
@@ -1259,7 +1432,7 @@ __global__ void sigmoid_kernel(float* __restrict__ out, const float* __restrict_
 }
 void kernel_ops::sigmoid(void* out_data, const void* in_data, size_t num_elements)
 {
-    const int BLOCK_SIZE = 256;
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     // Vectorized addition
@@ -1315,7 +1488,7 @@ __global__ void tanh_kernel(float* __restrict__ out, const float* __restrict__ i
 }
 void kernel_ops::tanh(void* out_data, const void* in_data, size_t num_elements)
 {
-    const int BLOCK_SIZE = 256;
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     // Vectorized addition
@@ -1371,7 +1544,7 @@ __global__ void sqrt_kernel(float* __restrict__ out, const float* __restrict__ i
 }
 void kernel_ops::sqrt(void* out_data, const void* in_data, size_t num_elements)
 {
-    const int BLOCK_SIZE = 256;
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     // Vectorized addition
@@ -1427,7 +1600,7 @@ __global__ void square_kernel(float* __restrict__ out, const float* __restrict__
 }
 void kernel_ops::square(void* out_data, const void* in_data, size_t num_elements)
 {
-    const int BLOCK_SIZE = 256;
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     // Vectorized addition
@@ -1483,7 +1656,7 @@ __global__ void pow_kernel(float* __restrict__ out, const float* __restrict__ in
 }
 void kernel_ops::pow(void* out_data, const void* in_data, float exp, size_t num_elements)
 {
-    const int BLOCK_SIZE = 256;
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     // Vectorized addition
@@ -1562,8 +1735,10 @@ void kernel_ops::normal(void* data_ptr, float mean, float std, size_t num_elemen
 void kernel_ops::uniform(void* data_ptr, float min, float max, size_t num_elements)
 {
     curandGenerateUniform(rng::generator(), (float*)data_ptr, num_elements);
-    multiply_scalar(data_ptr, data_ptr, max - min, num_elements);
-    add_scalar(data_ptr, data_ptr, min, num_elements);
+
+    float range = max - min;
+    multiply_scalar(data_ptr, data_ptr, &range, num_elements, false, 1.f);
+    add_scalar(data_ptr, data_ptr, &min, num_elements, false, 1.f);
 }
 
 void kernel_ops::shuffle(void* values, size_t length)
@@ -1588,7 +1763,7 @@ __global__ void fast_arange_kernel(int* data, int a, int stride, size_t count)
 }
 void kernel_ops::arange(void* data_ptr, int a, int stride, size_t count)
 {
-    const int BLOCK_SIZE = 256;
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     CUDA_LAUNCH(fast_arange_kernel, grid_size, BLOCK_SIZE, (int*)data_ptr, a, stride, count);
@@ -1798,7 +1973,7 @@ __global__ void sum_dim_strided(float* __restrict__ out, const float* __restrict
 }
 void kernel_ops::sum(void* out_data, const void* in_data, int element_stride, int element_count, int rows)
 {
-    constexpr int BLOCK = 256;
+    constexpr int BLOCK = DEFAULT_BLOCK_SIZE;
 
     // Don't run empty tensors.
     if (!element_count) return;
@@ -1880,7 +2055,7 @@ __global__ void mean_dim_strided(float* __restrict__ out, const float* __restric
 }
 void kernel_ops::mean(void* out_data, const void* in_data, int element_stride, int element_count, int rows)
 {
-    constexpr int BLOCK = 256;
+    constexpr int BLOCK = DEFAULT_BLOCK_SIZE;
 
     // Don't run empty tensors.
     if (!element_count) return;
@@ -1959,7 +2134,7 @@ __global__ void var_dim_strided(float* __restrict__ out, const float* __restrict
 }
 void kernel_ops::var(void* out_data, const void* in_data, int element_stride, int element_count, int rows)
 {
-    constexpr int BLOCK = 256;
+    constexpr int BLOCK = DEFAULT_BLOCK_SIZE;
 
     // Don't run empty tensors.
     if (!element_count) return;
@@ -2038,7 +2213,7 @@ __global__ void std_dim_strided(float* __restrict__ out, const float* __restrict
 }
 void kernel_ops::std(void* out_data, const void* in_data, int element_stride, int element_count, int rows)
 {
-    constexpr int BLOCK = 256;
+    constexpr int BLOCK = DEFAULT_BLOCK_SIZE;
 
     // Don't run empty tensors.
     if (!element_count) return;
@@ -2157,7 +2332,7 @@ __global__ void softmax_dim_strided(float* __restrict__ out, const float* __rest
 }
 void kernel_ops::softmax(void* out_data, const void* in_data, int element_stride, int element_count, int rows)
 {
-    constexpr int BLOCK = 256;
+    constexpr int BLOCK = DEFAULT_BLOCK_SIZE;
 
     // Don't run empty tensors.
     if (!element_count) return;
@@ -2183,6 +2358,264 @@ void kernel_ops::softmax(void* out_data, const void* in_data, int element_stride
         );
         CUDA_CHECK(cudaGetLastError());
     }
+}
+
+template<int BLOCK>
+__inline__ __device__ void block_arg_max(float& max, size_t& arg)
+{
+    static_assert(BLOCK % 32 == 0, "BLOCK must be a multiple of 32");
+    static_assert(BLOCK <= 1024, "BLOCK must be less or equal to 1024");
+
+    int lane = threadIdx.x % 32;
+    int warp = threadIdx.x / 32;
+
+    // Shared max and arg.
+    __shared__ float shared_val[32];
+    __shared__ size_t shared_arg[32];
+
+    // synch max.
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1)
+    {
+        float other_val  = __shfl_down_sync(0xffffffff, max, offset);
+        size_t other_arg = __shfl_down_sync(0xffffffff, arg, offset);
+
+        if (other_val > max || (other_val == max && other_arg < arg))
+        {
+            max = other_val;
+            arg = other_arg;
+        }
+    }
+
+    if (lane == 0)
+    {
+        shared_val[warp] = max;
+        shared_arg[warp] = arg;
+    }
+    __syncthreads();
+
+    if (warp == 0)
+    {
+        int num_warps = BLOCK / 32;
+        max = (lane < num_warps) ? shared_val[lane] : -CUDART_INF_F;
+        arg = (lane < num_warps) ? shared_arg[lane] : 0;
+
+        #pragma unroll
+        for (int offset = 16; offset > 0; offset >>= 1)
+        {
+            float other_val  = __shfl_down_sync(0xffffffff, max, offset);
+            size_t other_arg = __shfl_down_sync(0xffffffff, arg, offset);
+
+            if (other_val > max || (other_val == max && other_arg < arg))
+            {
+                max = other_val;
+                arg = other_arg;
+            }
+        }
+    }
+}
+template<int BLOCK>
+__global__ void max_kernel(float* __restrict__ out, float* __restrict__ hot, const float* __restrict__ in, size_t element_count, size_t stride)
+{
+    const size_t offset = blockIdx.x * element_count * stride + blockIdx.y;
+
+    // First pass compute max.
+    size_t arg = 0;
+    float max = -CUDART_INF_F;
+    for (size_t i = threadIdx.x; i < element_count; i += BLOCK)
+        if (max < in[offset + i * stride])
+        {
+            max = in[offset + i * stride];
+            arg = i;
+        }
+
+    // Synch all threads in this row.
+    block_arg_max<BLOCK>(max, arg);
+
+    // If you're the thread 0 you get to write to output.
+    if (threadIdx.x == 0)
+    {
+        out[blockIdx.x * stride + blockIdx.y] = max;
+        if (hot)
+            hot[offset + arg * stride] = 1.f;
+    }
+}
+void kernel_ops::max(void* out_data, void* hot_data, const void* in_data, size_t rows, size_t element_count, size_t stride)
+{
+    constexpr int BLOCK = DEFAULT_BLOCK_SIZE;
+    dim3 GRID((unsigned)rows, (unsigned)stride);
+
+    CUDA_LAUNCH(max_kernel<BLOCK>, GRID, BLOCK,
+        (float*)out_data,
+        (float*)hot_data,
+        (const float*)in_data,
+        element_count, stride
+    );
+    CUDA_CHECK(cudaGetLastError());
+}
+
+template<int BLOCK>
+__inline__ __device__ void block_arg_min(float& min, size_t& arg)
+{
+    static_assert(BLOCK % 32 == 0, "BLOCK must be a multiple of 32");
+    static_assert(BLOCK <= 1024, "BLOCK must be less or equal to 1024");
+
+    int lane = threadIdx.x % 32;
+    int warp = threadIdx.x / 32;
+
+    // Shared min and arg.
+    __shared__ float shared_val[32];
+    __shared__ size_t shared_arg[32];
+
+    // synch min.
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1)
+    {
+        float other_val  = __shfl_down_sync(0xffffffff, min, offset);
+        size_t other_arg = __shfl_down_sync(0xffffffff, arg, offset);
+
+        if (other_val < min || (other_val == min && other_arg < arg))
+        {
+            min = other_val;
+            arg = other_arg;
+        }
+    }
+
+    if (lane == 0)
+    {
+        shared_val[warp] = min;
+        shared_arg[warp] = arg;
+    }
+    __syncthreads();
+
+    if (warp == 0)
+    {
+        int num_warps = BLOCK / 32;
+        min = (lane < num_warps) ? shared_val[lane] : CUDART_INF_F;
+        arg = (lane < num_warps) ? shared_arg[lane] : 0;
+
+        #pragma unroll
+        for (int offset = 16; offset > 0; offset >>= 1)
+        {
+            float other_val  = __shfl_down_sync(0xffffffff, min, offset);
+            size_t other_arg = __shfl_down_sync(0xffffffff, arg, offset);
+
+            if (other_val < min || (other_val == min && other_arg < arg))
+            {
+                min = other_val;
+                arg = other_arg;
+            }
+        }
+    }
+}
+template<int BLOCK>
+__global__ void min_kernel(float* __restrict__ out, float* __restrict__ hot, const float* __restrict__ in, size_t element_count, size_t stride)
+{
+    const size_t offset = blockIdx.x * element_count * stride + blockIdx.y;
+
+    // First pass compute min.
+    size_t arg = 0;
+    float min = CUDART_INF_F;
+    for (size_t i = threadIdx.x; i < element_count; i += BLOCK)
+        if (min > in[offset + i * stride])
+        {
+            min = in[offset + i * stride];
+            arg = i;
+        }
+
+    // Synch all threads in this row.
+    block_arg_min<BLOCK>(min, arg);
+
+    // If you're the thread 0 you get to write to output.
+    if (threadIdx.x == 0)
+    {
+        out[blockIdx.x * stride + blockIdx.y] = min;
+        if (hot)
+            hot[offset + arg * stride] = 1.f;
+    }
+}
+void kernel_ops::min(void* out_data, void* hot_data, const void* in_data, size_t rows, size_t element_count, size_t stride)
+{
+    constexpr int BLOCK = DEFAULT_BLOCK_SIZE;
+    dim3 GRID((unsigned)rows, (unsigned)stride);
+
+    CUDA_LAUNCH(min_kernel<BLOCK>, GRID, BLOCK,
+        (float*)out_data,
+        (float*)hot_data,
+        (const float*)in_data,
+        element_count, stride
+    );
+    CUDA_CHECK(cudaGetLastError());
+}
+
+template<int BLOCK>
+__global__ void argmax_kernel(int* __restrict__ out, const float* __restrict__ in, size_t num_elements, size_t case_stride, size_t elem_stride)
+{
+    const size_t offset = blockIdx.x * case_stride;
+
+    // First pass compute max/arg.
+    size_t arg = 0;
+    float max = -CUDART_INF_F;
+    for (size_t i = threadIdx.x; i < num_elements; i += BLOCK)
+        if (max < in[offset + i * elem_stride])
+        {
+            max = in[offset + i * elem_stride];
+            arg = i;
+        }
+
+    // Synch all threads in this row.
+    block_arg_max<BLOCK>(max, arg);
+
+    // If you're the thread 0 you get to write to output.
+    if (threadIdx.x == 0)
+        out[blockIdx.x] = (int)arg;
+}
+void kernel_ops::argmax(void* out_data, const void* in_data, size_t num_cases, size_t num_elements, size_t case_stride, size_t elem_stride)
+{
+    constexpr int BLOCK = DEFAULT_BLOCK_SIZE;
+
+    CUDA_LAUNCH(argmax_kernel<BLOCK>, (unsigned)num_cases, BLOCK,
+        (int*)out_data,
+        (const float*)in_data,
+        num_elements,
+        case_stride, elem_stride
+    );
+    CUDA_CHECK(cudaGetLastError());
+}
+
+template<int BLOCK>
+__global__ void argmin_kernel(int* __restrict__ out, const float* __restrict__ in, size_t num_elements, size_t case_stride, size_t elem_stride)
+{
+    const size_t offset = blockIdx.x * case_stride;
+
+    // First pass compute min/arg.
+    size_t arg = 0;
+    float min = CUDART_INF_F;
+    for (size_t i = threadIdx.x; i < num_elements; i += BLOCK)
+        if (min > in[offset + i * elem_stride])
+        {
+            min = in[offset + i * elem_stride];
+            arg = i;
+        }
+
+    // Synch all threads in this row.
+    block_arg_min<BLOCK>(min, arg);
+
+    // If you're the thread 0 you get to write to output.
+    if (threadIdx.x == 0)
+        out[blockIdx.x] = (int)arg;
+}
+void kernel_ops::argmin(void* out_data, const void* in_data, size_t num_cases, size_t num_elements, size_t case_stride, size_t elem_stride)
+{
+    constexpr int BLOCK = DEFAULT_BLOCK_SIZE;
+
+    CUDA_LAUNCH(argmin_kernel<BLOCK>, (unsigned)num_cases, BLOCK,
+        (int*)out_data,
+        (const float*)in_data,
+        num_elements,
+        case_stride, elem_stride
+    );
+    CUDA_CHECK(cudaGetLastError());
 }
 
 /*
@@ -2620,7 +3053,7 @@ void kernel_ops::modify(const Shape& out_shape, const Shape& in_shape, const Sha
             desc.out_strides[d] = (size_t)out_strides[d];
         }
 
-        constexpr int BLOCK = 256;
+        constexpr int BLOCK = DEFAULT_BLOCK_SIZE;
         // If possible use vectorized kernel.
         if ((desc.inner % 4u == 0u) && (idxs[-1] % 4u == 0u))
         {
@@ -2679,7 +3112,7 @@ __global__ void repeat_kernel(float* __restrict__ out, const float* __restrict__
 }
 void kernel_ops::repeat(void* out_data, const void* in_data, int outer_size, int inner_size, int repetitions)
 {
-    constexpr int BLOCK = 256;
+    constexpr int BLOCK = DEFAULT_BLOCK_SIZE;
 
     if (outer_size == 1 && repetitions < 16)
         for (int k = 0; k < repetitions; k++)
@@ -2803,7 +3236,7 @@ __global__ void write_to_ptr_array(void** __restrict__ array, float* data_ptr, S
 }
 static inline void** generate_ptr_array(const void* data_ptr, const Shape& out_shape, const Shape& in_shape)
 {
-    const int BLOCK_SIZE = 256;
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     ShapeDesc desc = {};
@@ -2830,7 +3263,7 @@ static inline void** generate_ptr_array(const void* data_ptr, const Shape& out_s
     return ptr_array;
 }
 
-void kernel_ops::matmul(void* out_data, const void* A_data, const void* B_data, const Shape& out_shape, const Shape& A_shape, const Shape& B_shape)
+void kernel_ops::matmul(void* out_data, const void* A_data, const void* B_data, const Shape& out_shape, const Shape& A_shape, const Shape& B_shape, bool transA, bool transB)
 {
     constexpr size_t storage_size = 0x1000ull;
     constexpr size_t mask = storage_size - 1;
@@ -2853,7 +3286,7 @@ void kernel_ops::matmul(void* out_data, const void* A_data, const void* B_data, 
     class gemm_data_bank
     {
     private:
-        static inline size_t hash(const Shape& A_shape, const Shape& B_shape)
+        static inline size_t hash(const Shape& A_shape, const Shape& B_shape, bool transA, bool transB)
         {
             auto splitmix = [](size_t _seed)
             {
@@ -2868,13 +3301,16 @@ void kernel_ops::matmul(void* out_data, const void* A_data, const void* B_data, 
             for (unsigned i = 0; i < A_shape.dim(); i++)
                 key ^= splitmix(i) * A_shape[i] + splitmix(splitmix(i)) * B_shape[i];
 
+            if (transA) key ^= 0x2;
+            if (transB) key ^= 0x4;
+
             return key;
         }
     public:
-        static inline GEMM_data& get_data(const Shape& A_shape, const Shape& B_shape)
+        static inline GEMM_data& get_data(const Shape& A_shape, const Shape& B_shape, bool transA, bool transB)
         {
             // Find your data slot and retrieve the entry.
-            size_t key = hash(A_shape, B_shape);
+            size_t key = hash(A_shape, B_shape, transA, transB);
 
             // Do 2-slot, if any matches we are done here.
             GEMM_data* slot0 = &storage[key & mask];
@@ -2898,7 +3334,8 @@ void kernel_ops::matmul(void* out_data, const void* A_data, const void* B_data, 
             // --- Else time to generate the data ---
             
             // Different possible layout cases to consider.
-            bool b_batched = true;
+            bool B_batched = true;
+            bool B_must_batch = false;
             data.ptr_array = false;
 
             // Integer to store the batch size.
@@ -2907,24 +3344,32 @@ void kernel_ops::matmul(void* out_data, const void* A_data, const void* B_data, 
             // Find out which case we are dealing with.
             for (unsigned i = 0; i < A_shape.dim() - 2; i++)
             {
-                int a = A_shape[i], b = B_shape[i];
-                batch_count *= (a > b) ? a : b;
+                int A = A_shape[i];
+                int B = B_shape[i];
+                batch_count *= (A >= B) ? A : B;
 
-                if (a > b) b_batched = false;
-                if (b > a || (!b_batched && b != 1)) data.ptr_array = true;
+                if (A > B) B_batched = false;
+                if (B > 1) B_must_batch = true;
+                if (B > A || (!B_batched && (B != 1 || B_must_batch))) data.ptr_array = true;
             }
 
             // Extract matrix dimensions.
-            int64_t M = A_shape[-2];
-            int64_t N = B_shape[-1];
-            int64_t K = A_shape[-1];
+            int64_t M = transA ? A_shape[-1] : A_shape[-2];
+            int64_t N = transB ? B_shape[-2] : B_shape[-1];
+            int64_t K = transA ? A_shape[-2] : A_shape[-1];
 
             // Create a matmul descriptor.
             CUBLAS_CHECK(cublasLtMatmulDescCreate(&data.opDesc, CUBLAS_COMPUTE_32F, CUDA_R_32F));
 
-            // Create col-major layouts for A^T(K, M), B^T(N, K), C^T(N,M)
-            CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&data.aLayout, CUDA_R_32F, K, M, K));
-            CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&data.bLayout, CUDA_R_32F, N, K, N));
+            // Set transposition as specified. Since layouts are reversed reverse this too.
+            cublasOperation_t tA = transB ? CUBLAS_OP_T : CUBLAS_OP_N;
+            cublasOperation_t tB = transA ? CUBLAS_OP_T : CUBLAS_OP_N;
+            CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(data.opDesc, CUBLASLT_MATMUL_DESC_TRANSA, &tA, sizeof(tA)));
+            CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(data.opDesc, CUBLASLT_MATMUL_DESC_TRANSB, &tB, sizeof(tB)));
+
+            // Create col-major layouts for A, B and C.
+            CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&data.aLayout, CUDA_R_32F, A_shape[-1], A_shape[-2], A_shape[-1]));
+            CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&data.bLayout, CUDA_R_32F, B_shape[-1], B_shape[-2], B_shape[-1]));
             CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&data.cLayout, CUDA_R_32F, N, M, N));
             
             // If it needs a pointer array set the mode and batch size, every call you'll generate the array.
@@ -2944,8 +3389,8 @@ void kernel_ops::matmul(void* out_data, const void* A_data, const void* B_data, 
             // If it is batched set the batch mode.
             else if (batch_count > 1)
             {
-                int64_t strideB = (b_batched) ? K * N : 0ull;
-                int64_t strideA = M * K;
+                int64_t strideB = (B_batched) ? B_shape[-2] * B_shape[-1] : 0ull;
+                int64_t strideA = A_shape[-2] * A_shape[-1];
                 int64_t strideC = M * N;
 
                 cublasLtBatchMode_t batch_mode = CUBLASLT_BATCH_MODE_STRIDED;
@@ -2968,7 +3413,12 @@ void kernel_ops::matmul(void* out_data, const void* A_data, const void* B_data, 
             int out = 0;
             CUBLAS_CHECK(cublasLtMatmulAlgoGetHeuristic(cublas::handle(), data.opDesc, 
                 data.bLayout, data.aLayout, data.cLayout, data.cLayout, cublas::preference(), 1, &heur, &out));
-            TENSOR_CHECK(out != 0, "No cuBLASLt heuristic algorithm found for this GEMM.");
+            TENSOR_CHECK(out != 0, 
+                "No cuBLASLt heuristic algorithm found for this GEMM."
+            );
+            TENSOR_CHECK(heur.state == CUBLAS_STATUS_SUCCESS,
+                "cuBLASLt heuristic returned an unusable algorithm."
+            );
 
             // Store the algorithm and return the data.
             data.algorithm = heur.algo; data.key = key;
@@ -2977,7 +3427,7 @@ void kernel_ops::matmul(void* out_data, const void* A_data, const void* B_data, 
     };
 
     // Load data from bank.
-    GEMM_data& data = gemm_data_bank::get_data(A_shape, B_shape);
+    GEMM_data& data = gemm_data_bank::get_data(A_shape, B_shape, transA, transB);
 
     // If the offsets are arbitrary generate a pointer array and set it.
     if (data.ptr_array)
@@ -3026,7 +3476,7 @@ void kernel_ops::matmul(void* out_data, const void* A_data, const void* B_data, 
     }
 }
 
-void kernel_ops::matmul_bias(void* out_data, const void* A_data, const void* B_data, const void* bias, const Shape& out_shape, const Shape& A_shape, const Shape& B_shape, const Shape& bias_shape)
+void kernel_ops::matmul_bias(void* out_data, const void* A_data, const void* B_data, const void* bias, const Shape& out_shape, const Shape& A_shape, const Shape& B_shape, const Shape& bias_shape, bool transA, bool transB)
 {
     constexpr size_t storage_size = 0x1000ull;
     constexpr size_t mask = storage_size - 1;
@@ -3050,7 +3500,7 @@ void kernel_ops::matmul_bias(void* out_data, const void* A_data, const void* B_d
     class gemm_b_data_bank
     {
     private:
-        static inline size_t hash(const Shape& A_shape, const Shape& B_shape, const Shape& bias_shape)
+        static inline size_t hash(const Shape& A_shape, const Shape& B_shape, const Shape& bias_shape, bool transA, bool transB)
         {
             auto splitmix = [](size_t _seed)
             {
@@ -3067,14 +3517,17 @@ void kernel_ops::matmul_bias(void* out_data, const void* A_data, const void* B_d
                 key ^= splitmix(i) * A_shape[i] + 
                 splitmix(splitmix(i)) * B_shape[i] + 
                 splitmix(splitmix(splitmix(i))) * bias_shape[i];
+
+            if (transA) key ^= 0x2;
+            if (transB) key ^= 0x4;
     
             return key;
         }
     public:
-        static inline GEMM_B_data& get_data(const Shape& A_shape, const Shape& B_shape, const Shape& bias_shape)
+        static inline GEMM_B_data& get_data(const Shape& A_shape, const Shape& B_shape, const Shape& bias_shape, bool transA, bool transB)
         {
             // Find your data slot and retrieve the entry.
-            size_t key = hash(A_shape, B_shape, bias_shape);
+            size_t key = hash(A_shape, B_shape, bias_shape, transA, transB);
     
             // Do 2-slot, if any matches we are done here.
             GEMM_B_data* slot0 = &storage[key & mask];
@@ -3100,6 +3553,8 @@ void kernel_ops::matmul_bias(void* out_data, const void* A_data, const void* B_d
             // Different possible layout cases to consider.
             bool B_batched = true;
             bool b_batched = true;
+            bool B_must_batch = false;
+            bool b_must_batch = false;
             data.ptr_array = false;
             data.bias_fused = true;
 
@@ -3116,14 +3571,16 @@ void kernel_ops::matmul_bias(void* out_data, const void* A_data, const void* B_d
 
                 if (A > B) B_batched = false;
                 if (A > b) b_batched = false;
-                if (B > A || (!B_batched && B != 1)) data.ptr_array = true;
-                if (!b_batched && b != 1) data.bias_fused = false;
+                if (B > 1) B_must_batch = true;
+                if (b > 1) b_must_batch = true;
+                if (B > A || (!B_batched && (B != 1 || B_must_batch))) data.ptr_array = true;
+                if (b > A || (!b_batched && (b != 1 || b_must_batch))) data.bias_fused = false;
             }
 
             // Extract matrix dimensions.
-            int64_t M = A_shape[-2];
-            int64_t N = B_shape[-1];
-            int64_t K = A_shape[-1];
+            int64_t M = transA ? A_shape[-1] : A_shape[-2];
+            int64_t N = transB ? B_shape[-2] : B_shape[-1];
+            int64_t K = transA ? A_shape[-2] : A_shape[-1];
 
             // Last check for fused bias. make sure is (1,N) case.
             // Also cuBLAS does not support fused bias for pointer array mode.
@@ -3133,9 +3590,15 @@ void kernel_ops::matmul_bias(void* out_data, const void* A_data, const void* B_d
             // Create a matmul descriptor.
             CUBLAS_CHECK(cublasLtMatmulDescCreate(&data.opDesc, CUBLAS_COMPUTE_32F, CUDA_R_32F));
 
-            // Create col-major layouts for A^T(K, M), B^T(N, K), C^T(N,M)
-            CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&data.aLayout, CUDA_R_32F, K, M, K));
-            CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&data.bLayout, CUDA_R_32F, N, K, N));
+            // Set transposition as specified. Since layouts are reversed reverse this too.
+            cublasOperation_t tA = transB ? CUBLAS_OP_T : CUBLAS_OP_N;
+            cublasOperation_t tB = transA ? CUBLAS_OP_T : CUBLAS_OP_N;
+            CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(data.opDesc, CUBLASLT_MATMUL_DESC_TRANSA, &tA, sizeof(tA)));
+            CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(data.opDesc, CUBLASLT_MATMUL_DESC_TRANSB, &tB, sizeof(tB)));
+
+            // Create col-major layouts for A, B and C.
+            CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&data.aLayout, CUDA_R_32F, A_shape[-1], A_shape[-2], A_shape[-1]));
+            CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&data.bLayout, CUDA_R_32F, B_shape[-1], B_shape[-2], B_shape[-1]));
             CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&data.cLayout, CUDA_R_32F, N, M, N));
 
             // If it needs a pointer array set the mode and batch size, every call you'll generate the array.
@@ -3155,8 +3618,8 @@ void kernel_ops::matmul_bias(void* out_data, const void* A_data, const void* B_d
             // If it is batched set the batch mode.
             else if (batch_count > 1)
             {
-                int64_t strideB = (B_batched) ? K * N : 0ull;
-                int64_t strideA = M * K;
+                int64_t strideB = (B_batched) ? B_shape[-2] * B_shape[-1] : 0ull;
+                int64_t strideA = A_shape[-2] * A_shape[-1];
                 int64_t strideC = M * N;
 
                 cublasLtBatchMode_t batch_mode = CUBLASLT_BATCH_MODE_STRIDED;
@@ -3188,7 +3651,12 @@ void kernel_ops::matmul_bias(void* out_data, const void* A_data, const void* B_d
             int out = 0;
             CUBLAS_CHECK(cublasLtMatmulAlgoGetHeuristic(cublas::handle(), data.opDesc,
                 data.bLayout, data.aLayout, data.cLayout, data.cLayout, cublas::preference(), 1, &heur, &out));
-            TENSOR_CHECK(out != 0, "No cuBLASLt heuristic algorithm found for this GEMM.");
+            TENSOR_CHECK(out != 0, 
+                "No cuBLASLt heuristic algorithm found for this GEMM."
+            );
+            TENSOR_CHECK(heur.state == CUBLAS_STATUS_SUCCESS,
+                "cuBLASLt heuristic returned an unusable algorithm."
+            );
 
             // Store the algorithm and return the data.
             data.algorithm = heur.algo; data.key = key;
@@ -3197,7 +3665,7 @@ void kernel_ops::matmul_bias(void* out_data, const void* A_data, const void* B_d
     };
 
     // Load data from bank.
-    GEMM_B_data& data = gemm_b_data_bank::get_data(A_shape, B_shape, bias_shape);
+    GEMM_B_data& data = gemm_b_data_bank::get_data(A_shape, B_shape, bias_shape, transA, transB);
 
     // Set your bias pointer for cuBLAS fused bias.
     if (data.bias_fused)
@@ -3326,7 +3794,7 @@ __global__ void mse_kernel(float* __restrict__ out, const float* x, const float*
 }
 void kernel_ops::mse(void* out_data, const void* x_data, const void* y_data, size_t num_elements)
 {
-    constexpr int BLOCK = 256;
+    constexpr int BLOCK = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     // If possible use the fast kernel
@@ -3407,7 +3875,7 @@ __global__ void cross_entropy_loss_kernel(float* __restrict__ out, float* __rest
 }
 void kernel_ops::cross_entropy_loss(void* out_data, void* probs_data, const void* logits_data, const void* labels_data, size_t num_cases, size_t num_classes)
 {
-    constexpr int BLOCK = 256;
+    constexpr int BLOCK = DEFAULT_BLOCK_SIZE;
 
     CUDA_LAUNCH(cross_entropy_loss_kernel<BLOCK>, (unsigned)num_cases, BLOCK,
         (float*)out_data,
@@ -3444,7 +3912,7 @@ __global__ void negative_log_likelihood_kernel(float* __restrict__ out, const fl
 }
 void kernel_ops::negative_log_likelihood(void* out_data, const void* probs_data, const void* labels_data, size_t num_cases, size_t num_classes)
 {
-    constexpr int BLOCK = 256;
+    constexpr int BLOCK = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     CUDA_LAUNCH(negative_log_likelihood_kernel<BLOCK>, grid_size, BLOCK,
@@ -3469,7 +3937,7 @@ __global__ void one_hot_kernel(float* __restrict__ out, const int* __restrict__ 
 }
 void kernel_ops::one_hot(void* out_data, const void* labels_data, size_t num_cases, size_t num_classes)
 {
-    const int BLOCK_SIZE = 256;
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     CUDA_LAUNCH(one_hot_kernel, grid_size, BLOCK_SIZE,
@@ -3490,7 +3958,7 @@ __global__ void causal_mask_kernel(float* __restrict__ out, int L)
 }
 void kernel_ops::causal_mast(void* out_data, int L)
 {
-    constexpr int BLOCK = 256;
+    constexpr int BLOCK = DEFAULT_BLOCK_SIZE;
 
     CUDA_LAUNCH(causal_mask_kernel, L, BLOCK, (float*)out_data, L);
     CUDA_CHECK(cudaGetLastError());
@@ -3745,7 +4213,7 @@ __global__ void squeeze_add_dim(float* __restrict__ out, const float* __restrict
 }
 void kernel_ops::shaped_add(void* out_data, const void* in0_data, const void* in1_data, const Shape& in0_shape, const Shape& in1_shape)
 {
-    constexpr int BLOCK = 256;
+    constexpr int BLOCK = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     RegularOpDescriptor desc = analize_op_case(in1_data, in0_shape, in1_shape);
@@ -3939,7 +4407,7 @@ __global__ void squeeze_subtract_dim(float* __restrict__ out, const float* __res
 }
 void kernel_ops::shaped_subtract(void* out_data, const void* in0_data, const void* in1_data, const Shape& in0_shape, const Shape& in1_shape)
 {
-    constexpr int BLOCK = 256;
+    constexpr int BLOCK = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     RegularOpDescriptor desc = analize_op_case(in1_data, in0_shape, in1_shape);
@@ -4133,7 +4601,7 @@ __global__ void squeeze_multiply_dim(float* __restrict__ out, const float* __res
 }
 void kernel_ops::shaped_multiply(void* out_data, const void* in0_data, const void* in1_data, const Shape& in0_shape, const Shape& in1_shape)
 {
-    constexpr int BLOCK = 256;
+    constexpr int BLOCK = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     RegularOpDescriptor desc = analize_op_case(in1_data, in0_shape, in1_shape);
@@ -4327,7 +4795,7 @@ __global__ void squeeze_divide_dim(float* __restrict__ out, const float* __restr
 }
 void kernel_ops::shaped_divide(void* out_data, const void* in0_data, const void* in1_data, const Shape& in0_shape, const Shape& in1_shape)
 {
-    constexpr int BLOCK = 256;
+    constexpr int BLOCK = DEFAULT_BLOCK_SIZE;
     const int grid_size = device::sm_count() * 4;
 
     RegularOpDescriptor desc = analize_op_case(in1_data, in0_shape, in1_shape);
@@ -4420,5 +4888,678 @@ void kernel_ops::shaped_divide(void* out_data, const void* in0_data, const void*
         if (desc.temp) MemPool::free(desc.temp);
         break;
     }
+    }
+}
+
+/*
+--------------------------------------------------------------------------------------------------------------------------
+ Comparisson Operators
+--------------------------------------------------------------------------------------------------------------------------
+*/
+
+__global__ void less_than_scalar_kernel_vec(float4* __restrict__ out, const float4* __restrict__ in, float val, size_t num_vec)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_vec; i += stride)
+    {
+        float4 v = in[i];
+
+        v.x = (v.x < val);
+        v.y = (v.y < val);
+        v.z = (v.z < val);
+        v.w = (v.w < val);
+
+        out[i] = v;
+    }
+}
+__global__ void less_than_scalar_kernel(float* __restrict__ out, const float* __restrict__ in, float val, size_t num_elements)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_elements; i += stride)
+        out[i] = (in[i] < val);
+}
+void kernel_ops::less_than_scalar(void* out_data, const void* in_data, float val, size_t num_elements)
+{
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
+    const int grid_size = device::sm_count() * 4;
+
+    // Vectorized less than operator
+    size_t num_vec = num_elements / 4;
+    if (num_vec)
+    {
+        CUDA_LAUNCH(less_than_scalar_kernel_vec, grid_size, BLOCK_SIZE,
+            (float4*)out_data,
+            (const float4*)in_data,
+            val, num_vec
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+
+    // Remainder less than operator
+    size_t remainder = num_elements % 4;
+    if (remainder)
+    {
+        size_t offset = num_vec * 4;
+        CUDA_LAUNCH(less_than_scalar_kernel, grid_size, BLOCK_SIZE,
+            (float*)out_data + offset,
+            (const float*)in_data + offset,
+            val, remainder
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+}
+
+__global__ void more_than_scalar_kernel_vec(float4* __restrict__ out, const float4* __restrict__ in, float val, size_t num_vec)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_vec; i += stride)
+    {
+        float4 v = in[i];
+
+        v.x = (v.x > val);
+        v.y = (v.y > val);
+        v.z = (v.z > val);
+        v.w = (v.w > val);
+
+        out[i] = v;
+    }
+}
+__global__ void more_than_scalar_kernel(float* __restrict__ out, const float* __restrict__ in, float val, size_t num_elements)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_elements; i += stride)
+        out[i] = (in[i] > val);
+}
+void kernel_ops::more_than_scalar(void* out_data, const void* in_data, float val, size_t num_elements)
+{
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
+    const int grid_size = device::sm_count() * 4;
+
+    // Vectorized more than operator
+    size_t num_vec = num_elements / 4;
+    if (num_vec)
+    {
+        CUDA_LAUNCH(more_than_scalar_kernel_vec, grid_size, BLOCK_SIZE,
+            (float4*)out_data,
+            (const float4*)in_data,
+            val, num_vec
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+
+    // Remainder more than operator
+    size_t remainder = num_elements % 4;
+    if (remainder)
+    {
+        size_t offset = num_vec * 4;
+        CUDA_LAUNCH(more_than_scalar_kernel, grid_size, BLOCK_SIZE,
+            (float*)out_data + offset,
+            (const float*)in_data + offset,
+            val, remainder
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+}
+
+__global__ void leq_than_scalar_kernel_vec(float4* __restrict__ out, const float4* __restrict__ in, float val, size_t num_vec)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_vec; i += stride)
+    {
+        float4 v = in[i];
+
+        v.x = (v.x <= val);
+        v.y = (v.y <= val);
+        v.z = (v.z <= val);
+        v.w = (v.w <= val);
+
+        out[i] = v;
+    }
+}
+__global__ void leq_than_scalar_kernel(float* __restrict__ out, const float* __restrict__ in, float val, size_t num_elements)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_elements; i += stride)
+        out[i] = (in[i] <= val);
+}
+void kernel_ops::leq_than_scalar(void* out_data, const void* in_data, float val, size_t num_elements)
+{
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
+    const int grid_size = device::sm_count() * 4;
+
+    // Vectorized leq operator
+    size_t num_vec = num_elements / 4;
+    if (num_vec)
+    {
+        CUDA_LAUNCH(leq_than_scalar_kernel_vec, grid_size, BLOCK_SIZE,
+            (float4*)out_data,
+            (const float4*)in_data,
+            val, num_vec
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+
+    // Remainder leq operator
+    size_t remainder = num_elements % 4;
+    if (remainder)
+    {
+        size_t offset = num_vec * 4;
+        CUDA_LAUNCH(leq_than_scalar_kernel, grid_size, BLOCK_SIZE,
+            (float*)out_data + offset,
+            (const float*)in_data + offset,
+            val, remainder
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+}
+
+__global__ void meq_than_scalar_kernel_vec(float4* __restrict__ out, const float4* __restrict__ in, float val, size_t num_vec)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_vec; i += stride)
+    {
+        float4 v = in[i];
+
+        v.x = (v.x >= val);
+        v.y = (v.y >= val);
+        v.z = (v.z >= val);
+        v.w = (v.w >= val);
+
+        out[i] = v;
+    }
+}
+__global__ void meq_than_scalar_kernel(float* __restrict__ out, const float* __restrict__ in, float val, size_t num_elements)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_elements; i += stride)
+        out[i] = (in[i] >= val);
+}
+void kernel_ops::meq_than_scalar(void* out_data, const void* in_data, float val, size_t num_elements)
+{
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
+    const int grid_size = device::sm_count() * 4;
+
+    // Vectorized meq operator
+    size_t num_vec = num_elements / 4;
+    if (num_vec)
+    {
+        CUDA_LAUNCH(meq_than_scalar_kernel_vec, grid_size, BLOCK_SIZE,
+            (float4*)out_data,
+            (const float4*)in_data,
+            val, num_vec
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+
+    // Remainder meq operator
+    size_t remainder = num_elements % 4;
+    if (remainder)
+    {
+        size_t offset = num_vec * 4;
+        CUDA_LAUNCH(meq_than_scalar_kernel, grid_size, BLOCK_SIZE,
+            (float*)out_data + offset,
+            (const float*)in_data + offset,
+            val, remainder
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+}
+
+__global__ void eq_than_scalar_kernel_vec(float4* __restrict__ out, const float4* __restrict__ in, float val, size_t num_vec)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_vec; i += stride)
+    {
+        float4 v = in[i];
+
+        v.x = (v.x == val);
+        v.y = (v.y == val);
+        v.z = (v.z == val);
+        v.w = (v.w == val);
+
+        out[i] = v;
+    }
+}
+__global__ void eq_than_scalar_kernel(float* __restrict__ out, const float* __restrict__ in, float val, size_t num_elements)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_elements; i += stride)
+        out[i] = (in[i] == val);
+}
+void kernel_ops::eq_than_scalar(void* out_data, const void* in_data, float val, size_t num_elements)
+{
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
+    const int grid_size = device::sm_count() * 4;
+
+    // Vectorized eq operator
+    size_t num_vec = num_elements / 4;
+    if (num_vec)
+    {
+        CUDA_LAUNCH(eq_than_scalar_kernel_vec, grid_size, BLOCK_SIZE,
+            (float4*)out_data,
+            (const float4*)in_data,
+            val, num_vec
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+
+    // Remainder eq operator
+    size_t remainder = num_elements % 4;
+    if (remainder)
+    {
+        size_t offset = num_vec * 4;
+        CUDA_LAUNCH(eq_than_scalar_kernel, grid_size, BLOCK_SIZE,
+            (float*)out_data + offset,
+            (const float*)in_data + offset,
+            val, remainder
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+}
+
+__global__ void neq_than_scalar_kernel_vec(float4* __restrict__ out, const float4* __restrict__ in, float val, size_t num_vec)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_vec; i += stride)
+    {
+        float4 v = in[i];
+
+        v.x = (v.x != val);
+        v.y = (v.y != val);
+        v.z = (v.z != val);
+        v.w = (v.w != val);
+
+        out[i] = v;
+    }
+}
+__global__ void neq_than_scalar_kernel(float* __restrict__ out, const float* __restrict__ in, float val, size_t num_elements)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_elements; i += stride)
+        out[i] = (in[i] != val);
+}
+void kernel_ops::neq_than_scalar(void* out_data, const void* in_data, float val, size_t num_elements)
+{
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
+    const int grid_size = device::sm_count() * 4;
+
+    // Vectorized neq operator
+    size_t num_vec = num_elements / 4;
+    if (num_vec)
+    {
+        CUDA_LAUNCH(neq_than_scalar_kernel_vec, grid_size, BLOCK_SIZE,
+            (float4*)out_data,
+            (const float4*)in_data,
+            val, num_vec
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+
+    // Remainder neq operator
+    size_t remainder = num_elements % 4;
+    if (remainder)
+    {
+        size_t offset = num_vec * 4;
+        CUDA_LAUNCH(neq_than_scalar_kernel, grid_size, BLOCK_SIZE,
+            (float*)out_data + offset,
+            (const float*)in_data + offset,
+            val, remainder
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+}
+
+
+__global__ void less_than_kernel_vec(float4* __restrict__ out, const float4* in0, const float4* in1, size_t num_vec, size_t num_vec1)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_vec; i += stride)
+    {
+        float4 v0 = in0[i];
+        float4 v1 = in1[i % num_vec1];
+
+        v0.x = (v0.x < v1.x);
+        v0.y = (v0.y < v1.y);
+        v0.z = (v0.z < v1.z);
+        v0.w = (v0.w < v1.w);
+
+        out[i] = v0;
+    }
+}
+__global__ void less_than_kernel(float* __restrict__ out, const float* in0, const float* in1, size_t num_elements, size_t num_elements1)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_elements; i += stride)
+        out[i] = (in0[i] < in1[i % num_elements1]);
+}
+void kernel_ops::less_than(void* out_data, const void* in0_data, const void* in1_data, size_t numel0, size_t numel1)
+{
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
+    const int grid_size = device::sm_count() * 4;
+
+    // Vectorized less than operator
+    if (numel1 % 4 == 0)
+    {
+        CUDA_LAUNCH(less_than_kernel_vec, grid_size, BLOCK_SIZE,
+            (float4*)out_data,
+            (const float4*)in0_data,
+            (const float4*)in1_data,
+            numel0 / 4, numel1 / 4
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+    // Element-wise less than operator
+    else
+    {
+        CUDA_LAUNCH(less_than_kernel, grid_size, BLOCK_SIZE,
+            (float*)out_data,
+            (const float*)in0_data,
+            (const float*)in1_data,
+            numel0, numel1
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+}
+
+__global__ void more_than_kernel_vec(float4* __restrict__ out, const float4* in0, const float4* in1, size_t num_vec, size_t num_vec1)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_vec; i += stride)
+    {
+        float4 v0 = in0[i];
+        float4 v1 = in1[i % num_vec1];
+
+        v0.x = (v0.x > v1.x);
+        v0.y = (v0.y > v1.y);
+        v0.z = (v0.z > v1.z);
+        v0.w = (v0.w > v1.w);
+
+        out[i] = v0;
+    }
+}
+__global__ void more_than_kernel(float* __restrict__ out, const float* in0, const float* in1, size_t num_elements, size_t num_elements1)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_elements; i += stride)
+        out[i] = (in0[i] > in1[i % num_elements1]);
+}
+void kernel_ops::more_than(void* out_data, const void* in0_data, const void* in1_data, size_t numel0, size_t numel1)
+{
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
+    const int grid_size = device::sm_count() * 4;
+
+    // Vectorized more than operator
+    if (numel1 % 4 == 0)
+    {
+        CUDA_LAUNCH(more_than_kernel_vec, grid_size, BLOCK_SIZE,
+            (float4*)out_data,
+            (const float4*)in0_data,
+            (const float4*)in1_data,
+            numel0 / 4, numel1 / 4
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+    // Element-wise more than operator
+    else
+    {
+        CUDA_LAUNCH(more_than_kernel, grid_size, BLOCK_SIZE,
+            (float*)out_data,
+            (const float*)in0_data,
+            (const float*)in1_data,
+            numel0, numel1
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+}
+
+__global__ void leq_than_kernel_vec(float4* __restrict__ out, const float4* in0, const float4* in1, size_t num_vec, size_t num_vec1)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_vec; i += stride)
+    {
+        float4 v0 = in0[i];
+        float4 v1 = in1[i % num_vec1];
+
+        v0.x = (v0.x <= v1.x);
+        v0.y = (v0.y <= v1.y);
+        v0.z = (v0.z <= v1.z);
+        v0.w = (v0.w <= v1.w);
+
+        out[i] = v0;
+    }
+}
+__global__ void leq_than_kernel(float* __restrict__ out, const float* in0, const float* in1, size_t num_elements, size_t num_elements1)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_elements; i += stride)
+        out[i] = (in0[i] <= in1[i % num_elements1]);
+}
+void kernel_ops::leq_than(void* out_data, const void* in0_data, const void* in1_data, size_t numel0, size_t numel1)
+{
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
+    const int grid_size = device::sm_count() * 4;
+
+    // Vectorized leq operator
+    if (numel1 % 4 == 0)
+    {
+        CUDA_LAUNCH(leq_than_kernel_vec, grid_size, BLOCK_SIZE,
+            (float4*)out_data,
+            (const float4*)in0_data,
+            (const float4*)in1_data,
+            numel0 / 4, numel1 / 4
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+    // Element-wise leq operator
+    else
+    {
+        CUDA_LAUNCH(leq_than_kernel, grid_size, BLOCK_SIZE,
+            (float*)out_data,
+            (const float*)in0_data,
+            (const float*)in1_data,
+            numel0, numel1
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+}
+
+__global__ void meq_than_kernel_vec(float4* __restrict__ out, const float4* in0, const float4* in1, size_t num_vec, size_t num_vec1)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_vec; i += stride)
+    {
+        float4 v0 = in0[i];
+        float4 v1 = in1[i % num_vec1];
+
+        v0.x = (v0.x >= v1.x);
+        v0.y = (v0.y >= v1.y);
+        v0.z = (v0.z >= v1.z);
+        v0.w = (v0.w >= v1.w);
+
+        out[i] = v0;
+    }
+}
+__global__ void meq_than_kernel(float* __restrict__ out, const float* in0, const float* in1, size_t num_elements, size_t num_elements1)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_elements; i += stride)
+        out[i] = (in0[i] >= in1[i % num_elements1]);
+}
+void kernel_ops::meq_than(void* out_data, const void* in0_data, const void* in1_data, size_t numel0, size_t numel1)
+{
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
+    const int grid_size = device::sm_count() * 4;
+
+    // Vectorized meq operator
+    if (numel1 % 4 == 0)
+    {
+        CUDA_LAUNCH(meq_than_kernel_vec, grid_size, BLOCK_SIZE,
+            (float4*)out_data,
+            (const float4*)in0_data,
+            (const float4*)in1_data,
+            numel0 / 4, numel1 / 4
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+    // Element-wise meq operator
+    else
+    {
+        CUDA_LAUNCH(meq_than_kernel, grid_size, BLOCK_SIZE,
+            (float*)out_data,
+            (const float*)in0_data,
+            (const float*)in1_data,
+            numel0, numel1
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+}
+
+__global__ void eq_than_kernel_vec(float4* __restrict__ out, const float4* in0, const float4* in1, size_t num_vec, size_t num_vec1)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_vec; i += stride)
+    {
+        float4 v0 = in0[i];
+        float4 v1 = in1[i % num_vec1];
+
+        v0.x = (v0.x == v1.x);
+        v0.y = (v0.y == v1.y);
+        v0.z = (v0.z == v1.z);
+        v0.w = (v0.w == v1.w);
+
+        out[i] = v0;
+    }
+}
+__global__ void eq_than_kernel(float* __restrict__ out, const float* in0, const float* in1, size_t num_elements, size_t num_elements1)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_elements; i += stride)
+        out[i] = (in0[i] == in1[i % num_elements1]);
+}
+void kernel_ops::eq_than(void* out_data, const void* in0_data, const void* in1_data, size_t numel0, size_t numel1)
+{
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
+    const int grid_size = device::sm_count() * 4;
+
+    // Vectorized eq operator
+    if (numel1 % 4 == 0)
+    {
+        CUDA_LAUNCH(eq_than_kernel_vec, grid_size, BLOCK_SIZE,
+            (float4*)out_data,
+            (const float4*)in0_data,
+            (const float4*)in1_data,
+            numel0 / 4, numel1 / 4
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+    // Element-wise eq operator
+    else
+    {
+        CUDA_LAUNCH(eq_than_kernel, grid_size, BLOCK_SIZE,
+            (float*)out_data,
+            (const float*)in0_data,
+            (const float*)in1_data,
+            numel0, numel1
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+}
+
+__global__ void neq_than_kernel_vec(float4* __restrict__ out, const float4* in0, const float4* in1, size_t num_vec, size_t num_vec1)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_vec; i += stride)
+    {
+        float4 v0 = in0[i];
+        float4 v1 = in1[i % num_vec1];
+
+        v0.x = (v0.x != v1.x);
+        v0.y = (v0.y != v1.y);
+        v0.z = (v0.z != v1.z);
+        v0.w = (v0.w != v1.w);
+
+        out[i] = v0;
+    }
+}
+__global__ void neq_than_kernel(float* __restrict__ out, const float* in0, const float* in1, size_t num_elements, size_t num_elements1)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = blockDim.x * gridDim.x;
+
+    for (size_t i = idx; i < num_elements; i += stride)
+        out[i] = (in0[i] != in1[i % num_elements1]);
+}
+void kernel_ops::neq_than(void* out_data, const void* in0_data, const void* in1_data, size_t numel0, size_t numel1)
+{
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
+    const int grid_size = device::sm_count() * 4;
+
+    // Vectorized neq operator
+    if (numel1 % 4 == 0)
+    {
+        CUDA_LAUNCH(neq_than_kernel_vec, grid_size, BLOCK_SIZE,
+            (float4*)out_data,
+            (const float4*)in0_data,
+            (const float4*)in1_data,
+            numel0 / 4, numel1 / 4
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+    // Element-wise neq operator
+    else
+    {
+        CUDA_LAUNCH(neq_than_kernel, grid_size, BLOCK_SIZE,
+            (float*)out_data,
+            (const float*)in0_data,
+            (const float*)in1_data,
+            numel0, numel1
+        );
+        CUDA_CHECK(cudaGetLastError());
     }
 }

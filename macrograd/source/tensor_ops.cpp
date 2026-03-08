@@ -112,62 +112,72 @@ Tensor Tensor::operator[](const VectorInt& idxs) const
 	return out;
 }
 
-void Tensor::internal_add(float val)
+void Tensor::internal_add(const float* val, bool gpu, float factor)
 {
 	TENSOR_CHECK(is_init(),
 		"Trying to internally add to an empty tensor."
 	);
+	TENSOR_CHECK(!gpu || is_gpu(),
+		"Trying to internally add a float stored in CUDA to a CPU tensor."
+	);
 
 	float* data = __data;
 	const unsigned numel = this->numel();
-	
+
 	if (is_gpu())
-		kernel_ops::add_scalar(data, data, val, numel);
+		kernel_ops::add_scalar(data, data, val, numel, gpu, factor);
 
 	else
 	{
-		unsigned idx = 0;
-		while (idx < numel)
-			data[idx++] += val;
+		float scalar = *val * factor;
+		for (unsigned idx = 0; idx < numel; idx++)
+			data[idx] += scalar;
 	}
 }
 
-void Tensor::internal_multiply(float val)
+void Tensor::internal_multiply(const float* val, bool gpu, float factor)
 {
 	TENSOR_CHECK(is_init(),
 		"Trying to internally multiply to an empty tensor."
 	);
-
-	float* data = __data;
-	const unsigned numel = this->numel();
-
-	if (is_gpu())
-		kernel_ops::multiply_scalar(data, data, val, numel);
-
-	else
-	{
-		unsigned idx = 0;
-		while (idx < numel)
-			data[idx++] *= val;
-	}
-}
-
-void Tensor::internal_set(float val)
-{
-	TENSOR_CHECK(is_init(),
-		"Trying to internally set an empty tensor."
+	TENSOR_CHECK(!gpu || is_gpu(),
+		"Trying to internally multiply a float stored in CUDA to a CPU tensor."
 	);
 
 	float* data = __data;
 	const unsigned numel = this->numel();
 
 	if (is_gpu())
-		kernel_ops::set_scalar(data, val, numel);
+		kernel_ops::multiply_scalar(data, data, val, numel, gpu, factor);
+
 	else
 	{
-		unsigned idx = 0;
-		while (idx < numel)
-			data[idx++] = val;
+		float scalar = *val * factor;
+		for (unsigned idx = 0; idx < numel; idx++)
+			data[idx] *= scalar;
+	}
+}
+
+void Tensor::internal_set(const float* val, bool gpu, float factor)
+{
+	TENSOR_CHECK(is_init(),
+		"Trying to internally set an empty tensor."
+	);
+	TENSOR_CHECK(!gpu || is_gpu(),
+		"Trying to internally set a float stored in CUDA to a CPU tensor."
+	);
+
+	float* data = __data;
+	const unsigned numel = this->numel();
+
+	if (is_gpu())
+		kernel_ops::set_scalar(data, val, numel, gpu, factor);
+
+	else
+	{
+		float scalar = *val * factor;
+		for (unsigned idx = 0; idx < numel; idx++)
+			data[idx] = scalar;
 	}
 }
 
@@ -1073,19 +1083,19 @@ Tensor Tensor::sign() const
 	// Create output with the same shape as tensor, no gradient.
 	Tensor out(shape(), device(), false);
 
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten_data = __data;
+
+	// Get the element count.
+	unsigned _numel = out.numel();
+
 	// Now we actually add signs to the tensor.
 	if (out.is_gpu())
-		kernel_ops::sign(__dataof(out), __data, out.numel());
-	else
-	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten_data = __data;
-		// Iterate through data.
-		int idx = -1, _numel = int(numel());
-		while (++idx < _numel)
-			out_data[idx] = (ten_data[idx] > 0.f) ? 1.f : 0.f;
-	}
+		kernel_ops::sign(out_data, ten_data, _numel);
+
+	else for (unsigned idx = 0; idx < _numel; idx++)
+		out_data[idx] = (ten_data[idx] > 0.f) ? 1.f : (ten_data[idx] < 0.f) ? -1.f : 0.f;
 
 	// Return out.
 	return out;
@@ -1216,7 +1226,7 @@ Tensor Tensor::relu() const
 		// Backpropagation. Zero for negative input one for positive.
 		void _backward() override
 		{
-			in.internal_gradient() += out.gradient() * in.sign();
+			in.internal_gradient() += out.gradient() * (in > 0.f);
 		}
 	};
 
@@ -2066,6 +2076,324 @@ Tensor Tensor::softmax(int dim) const
 	return out;
 }
 
+Tensor Tensor::max(int dim, bool keepdim) const
+{
+	// Max tensor operator for backpropagation.
+	class MaxOp : public Tensor::TensorInternals::TensorOp
+	{
+		// Tensor copy storage for the input. and one-hot encoded maxs.
+		Tensor in, one_hot;
+
+	public:
+		// Constructor, stores all the data of the operation.
+		MaxOp(const Tensor& _in, const Tensor& _one_hot, const Tensor& _out) : TensorOp{ "Max", _out },
+			in{ _in }, one_hot{ _one_hot }
+		{
+			_relatives[0] = &in;
+		}
+
+		// Backpropagation. Broadcasts to one-hot elements of input.
+		void _backward() override
+		{
+			in.internal_gradient() += one_hot * out.gradient();
+		}
+	};
+
+	// Tensor must be initialized.
+	TENSOR_CHECK(is_init(),
+		"Trying to apply max to an empty tensor."
+	);
+
+	// Modulo dimension.
+	dim = ((dim % (int)_view.dim()) + _view.dim()) % _view.dim();
+
+	// Get the initial dimension size.
+	unsigned _size = size(dim);
+	// Compute output shape.
+	Shape out_shape = shape();
+	out_shape[dim] = 1;
+
+	// Create output with the new shape.
+	Tensor out(out_shape, device(), has_grad());
+
+	// Create one-hot encoded tensor to store maxs for backprop.
+	Tensor one_hot = Tensor();
+	if (has_grad())
+		one_hot = Tensor(_view, device(), false);
+
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten_data = __data;
+	float* hot_data = has_grad() ? __dataof(one_hot) : nullptr;
+
+	// Get relevant strides.
+	const unsigned elem_stride = _stride[dim];
+	const unsigned prev_stride = elem_stride * _size;
+	// Get outer size.
+	unsigned prev_size = out.numel() / elem_stride;
+
+	// Now we actually find the max values.
+	if (out.is_gpu())
+		kernel_ops::max(out_data, hot_data, ten_data, prev_size, _size, elem_stride);
+	else
+	{
+		// Iterate through all vectors to compute max.
+		for (unsigned prev_count = 0; prev_count < prev_size; prev_count++)
+		for (unsigned post_count = 0; post_count < elem_stride; post_count++)
+		{
+			unsigned ten_idx = prev_count * prev_stride + post_count;
+			unsigned out_idx = prev_count * elem_stride + post_count;
+
+			float max = ten_data[ten_idx];
+			int argmax = 0;
+
+			// Compare all elements.
+			for (unsigned k = 1u; k < _size; k++)
+			{
+				const float val = ten_data[ten_idx + k * elem_stride];
+				if (val > max)
+				{
+					max = val;
+					argmax = k;
+				}
+			}
+			// Write the max to output.
+			out_data[out_idx] = max;
+
+			// Store argmax if grad.
+			if (hot_data)
+				hot_data[ten_idx + argmax * elem_stride] = 1.f;
+		}
+	}
+
+	// If it was a gradient operation store a MaxOp instance.
+	if (has_grad())
+		out._internals->op = new MaxOp(*this, one_hot, out);
+
+	// Return out. Squeeze if necessary.
+	if (!keepdim && out.dim() > 1)
+		return out.squeeze(dim);
+	return out;
+}
+
+Tensor Tensor::min(int dim, bool keepdim) const
+{
+	// Min tensor operator for backpropagation.
+	class MinOp : public Tensor::TensorInternals::TensorOp
+	{
+		// Tensor copy storage for the input. and one-hot encoded mins.
+		Tensor in, one_hot;
+
+	public:
+		// Constructor, stores all the data of the operation.
+		MinOp(const Tensor& _in, const Tensor& _one_hot, const Tensor& _out) : TensorOp{ "Min", _out },
+			in{ _in }, one_hot{ _one_hot }
+		{
+			_relatives[0] = &in;
+		}
+
+		// Backpropagation. Broadcasts to one-hot elements of input.
+		void _backward() override
+		{
+			in.internal_gradient() += one_hot * out.gradient();
+		}
+	};
+
+	// Tensor must be initialized.
+	TENSOR_CHECK(is_init(),
+		"Trying to apply min to an empty tensor."
+	);
+
+	// Modulo dimension.
+	dim = ((dim % (int)_view.dim()) + _view.dim()) % _view.dim();
+
+	// Get the initial dimension size.
+	unsigned _size = size(dim);
+	// Compute output shape.
+	Shape out_shape = shape();
+	out_shape[dim] = 1;
+
+	// Create output with the new shape.
+	Tensor out(out_shape, device(), has_grad());
+
+	// Create one-hot encoded tensor to store mins for backprop.
+	Tensor one_hot = Tensor();
+	if (has_grad())
+		one_hot = Tensor(_view, device(), false);
+
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten_data = __data;
+	float* hot_data = has_grad() ? __dataof(one_hot) : nullptr;
+
+	// Get relevant strides.
+	const unsigned elem_stride = _stride[dim];
+	const unsigned prev_stride = elem_stride * _size;
+	// Get outer size.
+	unsigned prev_size = out.numel() / elem_stride;
+
+	// Now we actually find the min values.
+	if (out.is_gpu())
+		kernel_ops::min(out_data, hot_data, ten_data, prev_size, _size, elem_stride);
+	else
+	{
+		// Iterate through all vectors to compute min.
+		for (unsigned prev_count = 0; prev_count < prev_size; prev_count++)
+			for (unsigned post_count = 0; post_count < elem_stride; post_count++)
+			{
+				unsigned ten_idx = prev_count * prev_stride + post_count;
+				unsigned out_idx = prev_count * elem_stride + post_count;
+
+				float min = ten_data[ten_idx];
+				int argmin = 0;
+
+				// Compare all elements.
+				for (unsigned k = 1u; k < _size; k++)
+				{
+					const float val = ten_data[ten_idx + k * elem_stride];
+					if (val < min)
+					{
+						min = val;
+						argmin = k;
+					}
+				}
+				// Write the min to output.
+				out_data[out_idx] = min;
+
+				// Store argmin if grad.
+				if (hot_data)
+					hot_data[ten_idx + argmin * elem_stride] = 1.f;
+			}
+	}
+
+	// If it was a gradient operation store a MinOp instance.
+	if (has_grad())
+		out._internals->op = new MinOp(*this, one_hot, out);
+
+	// Return out. Squeeze if necessary.
+	if (!keepdim && out.dim() > 1)
+		return out.squeeze(dim);
+	return out;
+}
+
+VectorInt Tensor::argmax(bool last_dim) const
+{
+	// Tensor must be initialized.
+	TENSOR_CHECK(is_init(),
+		"Trying to get argmax from an empty tensor."
+	);
+	// Tensor must have leq two dimensions.
+	TENSOR_CHECK(dim() <= 2,
+		"Argmax can only be called on two dimensional or single dimensional tensors.\n"
+		"Use view/squeeze/flatten to reshape your tensor accordingly."
+	);
+
+	// Get the dimension size.
+	unsigned _size = size(last_dim ? -1 : 0);
+
+	// Get the length of the output vector.
+	unsigned cases = (dim() > 1) ? size(last_dim ? 0 : -1) : 1;
+
+	// Create output vector.
+	VectorInt args(cases, device());
+
+	// Extract the data.
+	int* args_data = args.data();
+	float* ten_data = __data;
+
+	// Get relevant strides.
+	const unsigned elem_stride = last_dim ? 1 : cases;
+	const unsigned case_stride = last_dim ? _size : 1;
+
+	// Now we actually find the max args.
+	if (args.is_gpu())
+		kernel_ops::argmax(args_data, ten_data, cases, _size, case_stride, elem_stride);
+	else
+	{
+		// Iterate through all vectors to find argmax.
+		for (unsigned row = 0; row < cases; row++)
+		{
+			unsigned ten_idx = row * case_stride;
+			float max = ten_data[ten_idx];
+			int argmax = 0;
+
+			// Compare all elements.
+			for (unsigned k = 1u; k < _size; k++)
+			{
+				const float val = ten_data[ten_idx + k * elem_stride];
+				if (val > max)
+				{
+					max = val;
+					argmax = k;
+				}
+			}
+			// Write the argmax to output.
+			args_data[row] = argmax;
+		}
+	}
+	// Return args.
+	return args;
+}
+
+VectorInt Tensor::argmin(bool last_dim) const
+{
+	// Tensor must be initialized.
+	TENSOR_CHECK(is_init(),
+		"Trying to get argmin from an empty tensor."
+	);
+	// Tensor must have leq two dimensions.
+	TENSOR_CHECK(dim() <= 2,
+		"Argmin can only be called on two dimensional or single dimensional tensors.\n"
+		"Use view/squeeze/flatten to reshape your tensor accordingly."
+	);
+
+	// Get the dimension size.
+	unsigned _size = size(last_dim ? -1 : 0);
+
+	// Get the length of the output vector.
+	unsigned cases = (dim() > 1) ? size(last_dim ? 0 : -1) : 1;
+
+	// Create output vector.
+	VectorInt args(cases, device());
+
+	// Extract the data.
+	int* args_data = args.data();
+	float* ten_data = __data;
+
+	// Get relevant strides.
+	const unsigned elem_stride = last_dim ? 1 : cases;
+	const unsigned case_stride = last_dim ? _size : 1;
+
+	// Now we actually find the min args.
+	if (args.is_gpu())
+		kernel_ops::argmin(args_data, ten_data, cases, _size, case_stride, elem_stride);
+	else
+	{
+		// Iterate through all vectors to find argmin.
+		for (unsigned row = 0; row < cases; row++)
+		{
+			unsigned ten_idx = row * case_stride;
+			float min = ten_data[ten_idx];
+			int argmin = 0;
+
+			// Compare all elements.
+			for (unsigned k = 1u; k < _size; k++)
+			{
+				const float val = ten_data[ten_idx + k * elem_stride];
+				if (val < min)
+				{
+					min = val;
+					argmin = k;
+				}
+			}
+			// Write the argmin to output.
+			args_data[row] = argmin;
+		}
+	}
+	// Return args.
+	return args;
+}
+
 /*
 --------------------------------------------------------------------------------------------------------------------------
  Regular Operators
@@ -2677,7 +3005,7 @@ Tensor operator+(const Tensor& ten, float val)
 
 	// Now we actually sum the tensors.
 	if (out.is_gpu())
-		kernel_ops::add_scalar(out_data, ten_data, val, out.numel());
+		kernel_ops::add_scalar(out_data, ten_data, &val, out.numel(), false, 1.f);
 	else
 	{
 		// Iterate through all elements.
@@ -2739,7 +3067,7 @@ Tensor operator*(const Tensor& ten, float val)
 
 	// Now we actually multiply the tensors.
 	if (out.is_gpu())
-		kernel_ops::multiply_scalar(out_data, ten_data, val, out.numel());
+		kernel_ops::multiply_scalar(out_data, ten_data, &val, out.numel(), false, 1.f);
 	else
 	{
 		// Iterate through all elements.
@@ -2916,7 +3244,10 @@ Tensor Tensor::operator-() const
 
 	// Now we actually negate the tensor.
 	if (out.is_gpu())
-		kernel_ops::multiply_scalar(out_data, ten_data, -1.f, out.numel());
+	{
+		float neg1 = -1.f;
+		kernel_ops::multiply_scalar(out_data, ten_data, &neg1, out.numel(), false, 1.f);
+	}
 	else
 	{
 		// Iterate through all elements.
@@ -2932,6 +3263,565 @@ Tensor Tensor::operator-() const
 	// Return out.
 	return out;
 }
+
+/*
+--------------------------------------------------------------------------------------------------------------------------
+ Comparisson Operators
+--------------------------------------------------------------------------------------------------------------------------
+*/
+
+Tensor operator<(const Tensor& ten0, const Tensor& ten1)
+{
+	// --- Sanity checks ---
+
+	// Both tensor must be initialized.
+	TENSOR_CHECK(ten0.is_init(),
+		"Trying to compare two tensors while the first tensor is empty."
+	);
+	TENSOR_CHECK(ten1.is_init(),
+		"Trying to compare two tensors while the second tensor is empty."
+	);
+	// Both tensors must be on the same device
+	TENSOR_CHECK(ten0.is_gpu() == ten1.is_gpu(),
+		"Trying to compare two tensors in different devices is not allowed."
+	);
+	// Ten0 must have more or equal the amount of dimensions of ten1 for broadcasting.
+	TENSOR_CHECK(ten0.dim() >= ten1.dim(),
+		"Trying to compare two tensors with incompatible dimensions.\n"
+		"The dimensions of the tensors must match or the second tensor must cleanly broadcast to the first one.\n"
+		"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
+	);
+	// Both tensors must either have the same dimension sizes or the second one have size one.
+	bool has_dim = false;
+	unsigned offset = ten0.dim() - ten1.dim();
+	for (unsigned i = offset; i < ten0.dim(); i++)
+	{
+		unsigned j = i - offset;
+		TENSOR_CHECK(ten0._view[i] == ten1._view[j] || (ten1._view[j] == 1 && !has_dim),
+			"Trying to compare two tensors with incompatible shapes for broadcasting.\n"
+			"Make sure shapes are compatible, meaning they have the same sizes or the second one is unitary.\n"
+			"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
+		);
+		// When dimensions start matching they must keep matching.
+		if (ten1._view[j] > 1) has_dim = true;
+	}
+
+	// Create output with the same shape as first tensor.
+	Tensor out(ten0.shape(), ten0.device(), false);
+
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten0_data = __dataof(ten0);
+	float* ten1_data = __dataof(ten1);
+
+	// Get counts.
+	unsigned numel0 = ten0.numel();
+	unsigned numel1 = ten1.numel();
+
+	// Now we actually compare the tensors.
+	if (out.is_gpu())
+		kernel_ops::less_than(out_data, ten0_data, ten1_data, numel0, numel1);
+
+	else for (unsigned idx = 0; idx < numel0; idx++)
+		out_data[idx] = (ten0_data[idx] < ten1_data[idx % numel1]) ? 1.f : 0.f;
+
+	// Return out.
+	return out;
+}
+
+Tensor operator>(const Tensor& ten0, const Tensor& ten1)
+{
+	// --- Sanity checks ---
+
+	// Both tensor must be initialized.
+	TENSOR_CHECK(ten0.is_init(),
+		"Trying to compare two tensors while the first tensor is empty."
+	);
+	TENSOR_CHECK(ten1.is_init(),
+		"Trying to compare two tensors while the second tensor is empty."
+	);
+	// Both tensors must be on the same device
+	TENSOR_CHECK(ten0.is_gpu() == ten1.is_gpu(),
+		"Trying to compare two tensors in different devices is not allowed."
+	);
+	// Ten0 must have more or equal the amount of dimensions of ten1 for broadcasting.
+	TENSOR_CHECK(ten0.dim() >= ten1.dim(),
+		"Trying to compare two tensors with incompatible dimensions.\n"
+		"The dimensions of the tensors must match or the second tensor must cleanly broadcast to the first one.\n"
+		"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
+	);
+	// Both tensors must either have the same dimension sizes or the second one have size one.
+	bool has_dim = false;
+	unsigned offset = ten0.dim() - ten1.dim();
+	for (unsigned i = offset; i < ten0.dim(); i++)
+	{
+		unsigned j = i - offset;
+		TENSOR_CHECK(ten0._view[i] == ten1._view[j] || (ten1._view[j] == 1 && !has_dim),
+			"Trying to compare two tensors with incompatible shapes for broadcasting.\n"
+			"Make sure shapes are compatible, meaning they have the same sizes or the second one is unitary.\n"
+			"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
+		);
+		// When dimensions start matching they must keep matching.
+		if (ten1._view[j] > 1) has_dim = true;
+	}
+
+	// Create output with the same shape as first tensor.
+	Tensor out(ten0.shape(), ten0.device(), false);
+
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten0_data = __dataof(ten0);
+	float* ten1_data = __dataof(ten1);
+
+	// Get counts.
+	unsigned numel0 = ten0.numel();
+	unsigned numel1 = ten1.numel();
+
+	// Now we actually compare the tensors.
+	if (out.is_gpu())
+		kernel_ops::more_than(out_data, ten0_data, ten1_data, numel0, numel1);
+
+	else for (unsigned idx = 0; idx < numel0; idx++)
+		out_data[idx] = (ten0_data[idx] > ten1_data[idx % numel1]) ? 1.f : 0.f;
+
+	// Return out.
+	return out;
+}
+
+Tensor operator<=(const Tensor& ten0, const Tensor& ten1)
+{
+	// --- Sanity checks ---
+
+// Both tensor must be initialized.
+	TENSOR_CHECK(ten0.is_init(),
+		"Trying to compare two tensors while the first tensor is empty."
+	);
+	TENSOR_CHECK(ten1.is_init(),
+		"Trying to compare two tensors while the second tensor is empty."
+	);
+	// Both tensors must be on the same device
+	TENSOR_CHECK(ten0.is_gpu() == ten1.is_gpu(),
+		"Trying to compare two tensors in different devices is not allowed."
+	);
+	// Ten0 must have more or equal the amount of dimensions of ten1 for broadcasting.
+	TENSOR_CHECK(ten0.dim() >= ten1.dim(),
+		"Trying to compare two tensors with incompatible dimensions.\n"
+		"The dimensions of the tensors must match or the second tensor must cleanly broadcast to the first one.\n"
+		"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
+	);
+	// Both tensors must either have the same dimension sizes or the second one have size one.
+	bool has_dim = false;
+	unsigned offset = ten0.dim() - ten1.dim();
+	for (unsigned i = offset; i < ten0.dim(); i++)
+	{
+		unsigned j = i - offset;
+		TENSOR_CHECK(ten0._view[i] == ten1._view[j] || (ten1._view[j] == 1 && !has_dim),
+			"Trying to compare two tensors with incompatible shapes for broadcasting.\n"
+			"Make sure shapes are compatible, meaning they have the same sizes or the second one is unitary.\n"
+			"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
+		);
+		// When dimensions start matching they must keep matching.
+		if (ten1._view[j] > 1) has_dim = true;
+	}
+
+	// Create output with the same shape as first tensor.
+	Tensor out(ten0.shape(), ten0.device(), false);
+
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten0_data = __dataof(ten0);
+	float* ten1_data = __dataof(ten1);
+
+	// Get counts.
+	unsigned numel0 = ten0.numel();
+	unsigned numel1 = ten1.numel();
+
+	// Now we actually compare the tensors.
+	if (out.is_gpu())
+		kernel_ops::leq_than(out_data, ten0_data, ten1_data, numel0, numel1);
+
+	else for (unsigned idx = 0; idx < numel0; idx++)
+		out_data[idx] = (ten0_data[idx] <= ten1_data[idx % numel1]) ? 1.f : 0.f;
+
+	// Return out.
+	return out;
+}
+
+Tensor operator>=(const Tensor& ten0, const Tensor& ten1)
+{
+	// --- Sanity checks ---
+
+// Both tensor must be initialized.
+	TENSOR_CHECK(ten0.is_init(),
+		"Trying to compare two tensors while the first tensor is empty."
+	);
+	TENSOR_CHECK(ten1.is_init(),
+		"Trying to compare two tensors while the second tensor is empty."
+	);
+	// Both tensors must be on the same device
+	TENSOR_CHECK(ten0.is_gpu() == ten1.is_gpu(),
+		"Trying to compare two tensors in different devices is not allowed."
+	);
+	// Ten0 must have more or equal the amount of dimensions of ten1 for broadcasting.
+	TENSOR_CHECK(ten0.dim() >= ten1.dim(),
+		"Trying to compare two tensors with incompatible dimensions.\n"
+		"The dimensions of the tensors must match or the second tensor must cleanly broadcast to the first one.\n"
+		"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
+	);
+	// Both tensors must either have the same dimension sizes or the second one have size one.
+	bool has_dim = false;
+	unsigned offset = ten0.dim() - ten1.dim();
+	for (unsigned i = offset; i < ten0.dim(); i++)
+	{
+		unsigned j = i - offset;
+		TENSOR_CHECK(ten0._view[i] == ten1._view[j] || (ten1._view[j] == 1 && !has_dim),
+			"Trying to compare two tensors with incompatible shapes for broadcasting.\n"
+			"Make sure shapes are compatible, meaning they have the same sizes or the second one is unitary.\n"
+			"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
+		);
+		// When dimensions start matching they must keep matching.
+		if (ten1._view[j] > 1) has_dim = true;
+	}
+
+	// Create output with the same shape as first tensor.
+	Tensor out(ten0.shape(), ten0.device(), false);
+
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten0_data = __dataof(ten0);
+	float* ten1_data = __dataof(ten1);
+
+	// Get counts.
+	unsigned numel0 = ten0.numel();
+	unsigned numel1 = ten1.numel();
+
+	// Now we actually compare the tensors.
+	if (out.is_gpu())
+		kernel_ops::meq_than(out_data, ten0_data, ten1_data, numel0, numel1);
+
+	else for (unsigned idx = 0; idx < numel0; idx++)
+		out_data[idx] = (ten0_data[idx] >= ten1_data[idx % numel1]) ? 1.f : 0.f;
+
+	// Return out.
+	return out;
+}
+
+Tensor operator==(const Tensor& ten0, const Tensor& ten1)
+{
+	// --- Sanity checks ---
+
+// Both tensor must be initialized.
+	TENSOR_CHECK(ten0.is_init(),
+		"Trying to compare two tensors while the first tensor is empty."
+	);
+	TENSOR_CHECK(ten1.is_init(),
+		"Trying to compare two tensors while the second tensor is empty."
+	);
+	// Both tensors must be on the same device
+	TENSOR_CHECK(ten0.is_gpu() == ten1.is_gpu(),
+		"Trying to compare two tensors in different devices is not allowed."
+	);
+	// Ten0 must have more or equal the amount of dimensions of ten1 for broadcasting.
+	TENSOR_CHECK(ten0.dim() >= ten1.dim(),
+		"Trying to compare two tensors with incompatible dimensions.\n"
+		"The dimensions of the tensors must match or the second tensor must cleanly broadcast to the first one.\n"
+		"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
+	);
+	// Both tensors must either have the same dimension sizes or the second one have size one.
+	bool has_dim = false;
+	unsigned offset = ten0.dim() - ten1.dim();
+	for (unsigned i = offset; i < ten0.dim(); i++)
+	{
+		unsigned j = i - offset;
+		TENSOR_CHECK(ten0._view[i] == ten1._view[j] || (ten1._view[j] == 1 && !has_dim),
+			"Trying to compare two tensors with incompatible shapes for broadcasting.\n"
+			"Make sure shapes are compatible, meaning they have the same sizes or the second one is unitary.\n"
+			"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
+		);
+		// When dimensions start matching they must keep matching.
+		if (ten1._view[j] > 1) has_dim = true;
+	}
+
+	// Create output with the same shape as first tensor.
+	Tensor out(ten0.shape(), ten0.device(), false);
+
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten0_data = __dataof(ten0);
+	float* ten1_data = __dataof(ten1);
+
+	// Get counts.
+	unsigned numel0 = ten0.numel();
+	unsigned numel1 = ten1.numel();
+
+	// Now we actually compare the tensors.
+	if (out.is_gpu())
+		kernel_ops::eq_than(out_data, ten0_data, ten1_data, numel0, numel1);
+
+	else for (unsigned idx = 0; idx < numel0; idx++)
+		out_data[idx] = (ten0_data[idx] == ten1_data[idx % numel1]) ? 1.f : 0.f;
+
+	// Return out.
+	return out;
+}
+
+Tensor operator!=(const Tensor& ten0, const Tensor& ten1)
+{
+	// --- Sanity checks ---
+
+// Both tensor must be initialized.
+	TENSOR_CHECK(ten0.is_init(),
+		"Trying to compare two tensors while the first tensor is empty."
+	);
+	TENSOR_CHECK(ten1.is_init(),
+		"Trying to compare two tensors while the second tensor is empty."
+	);
+	// Both tensors must be on the same device
+	TENSOR_CHECK(ten0.is_gpu() == ten1.is_gpu(),
+		"Trying to compare two tensors in different devices is not allowed."
+	);
+	// Ten0 must have more or equal the amount of dimensions of ten1 for broadcasting.
+	TENSOR_CHECK(ten0.dim() >= ten1.dim(),
+		"Trying to compare two tensors with incompatible dimensions.\n"
+		"The dimensions of the tensors must match or the second tensor must cleanly broadcast to the first one.\n"
+		"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
+	);
+	// Both tensors must either have the same dimension sizes or the second one have size one.
+	bool has_dim = false;
+	unsigned offset = ten0.dim() - ten1.dim();
+	for (unsigned i = offset; i < ten0.dim(); i++)
+	{
+		unsigned j = i - offset;
+		TENSOR_CHECK(ten0._view[i] == ten1._view[j] || (ten1._view[j] == 1 && !has_dim),
+			"Trying to compare two tensors with incompatible shapes for broadcasting.\n"
+			"Make sure shapes are compatible, meaning they have the same sizes or the second one is unitary.\n"
+			"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
+		);
+		// When dimensions start matching they must keep matching.
+		if (ten1._view[j] > 1) has_dim = true;
+	}
+
+	// Create output with the same shape as first tensor.
+	Tensor out(ten0.shape(), ten0.device(), false);
+
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten0_data = __dataof(ten0);
+	float* ten1_data = __dataof(ten1);
+
+	// Get counts.
+	unsigned numel0 = ten0.numel();
+	unsigned numel1 = ten1.numel();
+
+	// Now we actually compare the tensors.
+	if (out.is_gpu())
+		kernel_ops::neq_than(out_data, ten0_data, ten1_data, numel0, numel1);
+
+	else for (unsigned idx = 0; idx < numel0; idx++)
+		out_data[idx] = (ten0_data[idx] != ten1_data[idx % numel1]) ? 1.f : 0.f;
+
+	// Return out.
+	return out;
+}
+
+Tensor operator<(const Tensor& ten, float val)
+{
+	// Tensor must be initialized.
+	TENSOR_CHECK(ten.is_init(),
+		"Trying to do scalar comparisson with an empty tensor."
+	);
+
+	// Create output with the same shape as tensor.
+	Tensor out(ten.shape(), ten.device(), false);
+
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten_data = __dataof(ten);
+
+	// Get count.
+	unsigned numel = ten.numel();
+
+	// Now we actually multiply the tensors.
+	if (out.is_gpu())
+		kernel_ops::less_than_scalar(out_data, ten_data, val, numel);
+
+	else for (unsigned idx = 0; idx < numel; idx++)
+		out_data[idx] = (ten_data[idx] < val) ? 1.f : 0.f;
+
+	// Return out.
+	return out;
+}
+
+Tensor operator>(const Tensor& ten, float val)
+{
+	// Tensor must be initialized.
+	TENSOR_CHECK(ten.is_init(),
+		"Trying to do scalar comparisson with an empty tensor."
+	);
+
+	// Create output with the same shape as tensor.
+	Tensor out(ten.shape(), ten.device(), false);
+
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten_data = __dataof(ten);
+
+	// Get count.
+	unsigned numel = ten.numel();
+
+	// Now we actually multiply the tensors.
+	if (out.is_gpu())
+		kernel_ops::more_than_scalar(out_data, ten_data, val, numel);
+
+	else for (unsigned idx = 0; idx < numel; idx++)
+		out_data[idx] = (ten_data[idx] > val) ? 1.f : 0.f;
+
+	// Return out.
+	return out;
+}
+
+Tensor operator<=(const Tensor& ten, float val)
+{
+	// Tensor must be initialized.
+	TENSOR_CHECK(ten.is_init(),
+		"Trying to do scalar comparisson with an empty tensor."
+	);
+
+	// Create output with the same shape as tensor.
+	Tensor out(ten.shape(), ten.device(), false);
+
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten_data = __dataof(ten);
+
+	// Get count.
+	unsigned numel = ten.numel();
+
+	// Now we actually multiply the tensors.
+	if (out.is_gpu())
+		kernel_ops::leq_than_scalar(out_data, ten_data, val, numel);
+
+	else for (unsigned idx = 0; idx < numel; idx++)
+		out_data[idx] = (ten_data[idx] <= val) ? 1.f : 0.f;
+
+	// Return out.
+	return out;
+}
+
+Tensor operator>=(const Tensor& ten, float val)
+{
+	// Tensor must be initialized.
+	TENSOR_CHECK(ten.is_init(),
+		"Trying to do scalar comparisson with an empty tensor."
+	);
+
+	// Create output with the same shape as tensor.
+	Tensor out(ten.shape(), ten.device(), false);
+
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten_data = __dataof(ten);
+
+	// Get count.
+	unsigned numel = ten.numel();
+
+	// Now we actually multiply the tensors.
+	if (out.is_gpu())
+		kernel_ops::meq_than_scalar(out_data, ten_data, val, numel);
+
+	else for (unsigned idx = 0; idx < numel; idx++)
+		out_data[idx] = (ten_data[idx] >= val) ? 1.f : 0.f;
+
+	// Return out.
+	return out;
+}
+
+Tensor operator==(const Tensor& ten, float val)
+{
+	// Tensor must be initialized.
+	TENSOR_CHECK(ten.is_init(),
+		"Trying to do scalar comparisson with an empty tensor."
+	);
+
+	// Create output with the same shape as tensor.
+	Tensor out(ten.shape(), ten.device(), false);
+
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten_data = __dataof(ten);
+
+	// Get count.
+	unsigned numel = ten.numel();
+
+	// Now we actually multiply the tensors.
+	if (out.is_gpu())
+		kernel_ops::eq_than_scalar(out_data, ten_data, val, numel);
+
+	else for (unsigned idx = 0; idx < numel; idx++)
+		out_data[idx] = (ten_data[idx] == val) ? 1.f : 0.f;
+
+	// Return out.
+	return out;
+}
+
+Tensor operator!=(const Tensor& ten, float val)
+{
+	// Tensor must be initialized.
+	TENSOR_CHECK(ten.is_init(),
+		"Trying to do scalar comparisson with an empty tensor."
+	);
+
+	// Create output with the same shape as tensor.
+	Tensor out(ten.shape(), ten.device(), false);
+
+	// Extract the data.
+	float* out_data = __dataof(out);
+	float* ten_data = __dataof(ten);
+
+	// Get count.
+	unsigned numel = ten.numel();
+
+	// Now we actually multiply the tensors.
+	if (out.is_gpu())
+		kernel_ops::neq_than_scalar(out_data, ten_data, val, numel);
+
+	else for (unsigned idx = 0; idx < numel; idx++)
+		out_data[idx] = (ten_data[idx] != val) ? 1.f : 0.f;
+
+	// Return out.
+	return out;
+}
+
+Tensor operator<(float val, const Tensor& ten)
+{
+	return (ten > val);
+}
+
+Tensor operator>(float val, const Tensor& ten)
+{
+	return (ten < val);
+}
+
+Tensor operator<=(float val, const Tensor& ten)
+{
+	return (ten >= val);
+}
+
+Tensor operator>=(float val, const Tensor& ten)
+{
+	return (ten <= val);
+}
+
+Tensor operator==(float val, const Tensor& ten)
+{
+	return (ten == val);
+}
+
+Tensor operator!=(float val, const Tensor& ten)
+{
+	return (ten != val);
+}
+
 
 /*
 --------------------------------------------------------------------------------------------------------------------------
@@ -3394,7 +4284,7 @@ Tensor& Tensor::operator+=(float val)
 
 	// Now we actually sum the tensor.
 	if (is_gpu())
-		kernel_ops::add_scalar(out_data, out_data, val, numel());
+		kernel_ops::add_scalar(out_data, out_data, &val, numel(), false, 1.f);
 	else
 	{
 		// Iterate through all elements.
@@ -3433,7 +4323,7 @@ Tensor& Tensor::operator*=(float val)
 
 	// Now we actually multiply the tensors.
 	if (is_gpu())
-		kernel_ops::multiply_scalar(out_data, out_data, val, numel());
+		kernel_ops::multiply_scalar(out_data, out_data, &val, numel(), false, 1.f);
 	else
 	{
 		// Iterate through all elements.
@@ -3457,7 +4347,7 @@ Tensor& Tensor::operator/=(float val)
 --------------------------------------------------------------------------------------------------------------------------
 */
 
-Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1)
+Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, bool transA, bool transB)
 {
 	// Matrix multiplication tensor operator for backpropagation.
 	class MatMulOp : public Tensor::TensorInternals::TensorOp
@@ -3465,10 +4355,13 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1)
 		// Tensor copy storage for the input matrices.
 		Tensor mat0, mat1;
 
+		// Storage for transposition information.
+		bool transA, transB;
+
 	public:
 		// Constructor, stores all the data of the operation.
-		MatMulOp(const Tensor& _mat0, const Tensor& _mat1, const Tensor& _out) : TensorOp{ "Matrix Multiplication", _out },
-			mat0{ _mat0 }, mat1{ _mat1 }
+		MatMulOp(const Tensor& _mat0, const Tensor& _mat1, const Tensor& _out, bool _transA, bool _transB) : TensorOp{ "Matrix Multiplication", _out },
+			mat0{ _mat0 }, mat1{ _mat1 }, transA{ _transA }, transB{ _transB }
 		{
 			_relatives[0] = &mat0;
 			_relatives[1] = &mat1;
@@ -3478,8 +4371,17 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1)
 		// The broadcasting logic of matmul and the '+=' operator handles shapes.
 		void _backward() override
 		{
-			if (mat0.has_grad()) mat0.internal_gradient() += matmul(out.gradient(), mat1.no_grad().transpose(-1, -2));
-			if (mat1.has_grad()) mat1.internal_gradient() += matmul(mat0.no_grad().transpose(-1, -2), out.gradient());
+			if (mat0.has_grad())
+			{
+				if (transA)	mat0.internal_gradient() += matmul(mat1.no_grad(), out.gradient(),  transB,  true);
+				else		mat0.internal_gradient() += matmul(out.gradient(), mat1.no_grad(), false, !transB);
+
+			}
+			if (mat1.has_grad())
+			{
+				if (transB) mat1.internal_gradient() += matmul(out.gradient(), mat0.no_grad(),  true,  transA);
+				else		mat1.internal_gradient() += matmul(mat0.no_grad(), out.gradient(), !transA, false);
+			}
 		}
 	};
 
@@ -3493,6 +4395,14 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1)
 	// Both tensors must be on the same device
 	TENSOR_CHECK(mat0.is_gpu() == mat1.is_gpu(),
 		"Trying to matrix multiply two tensors in different devices is not allowed."
+	);
+	TENSOR_CHECK(!transA || mat0.dim() > 1,
+		"Addint a transposition to a single dimensional tensor for a matmul call is not allowed.\n"
+		"Make sure your tensor has at least 2 dimensions if you set 'transA' as true."
+	);
+	TENSOR_CHECK(!transB || mat1.dim() > 1,
+		"Addint a transposition to a single dimensional tensor for a matmul call is not allowed.\n"
+		"Make sure your tensor has at least 2 dimensions if you set 'transB' as true."
 	);
 
 	// Gradiend data.
@@ -3515,7 +4425,7 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1)
 		A = A.unsqueeze(0);
 
 	// Make sure dimensions are compatible.
-	TENSOR_CHECK(A._view[-1] == B._view[-2],
+	TENSOR_CHECK(A._view[transA ? -2 : -1] == B._view[transB ? -1 : -2],
 		"Incompatible dimensions found inside a matmul() call.\n"
 		"Please make sure your tensors follow proper matrix multiplication logic (...,M,K) @ (...,K,N) = (...,M,N).\n"
 		"Matrix0 shape: %s | Matrix1 shape: %s", mat0._view.str(), mat1._view.str()
@@ -3531,8 +4441,8 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1)
 
 	// Prepare output shape.
 	Shape out_shape(A.dim(), (int*)nullptr);
-	out_shape[-1] = B._view[-1];
-	out_shape[-2] = A._view[-2];
+	out_shape[-1] = transB ? B._view[-2] : B._view[-1];
+	out_shape[-2] = transA ? A._view[-1] : A._view[-2];
 	for (unsigned i = 0; i < A.dim() - 2; i++)
 		out_shape[i] = A._view[i] > B._view[i] ? A._view[i] : B._view[i];
 
@@ -3542,7 +4452,7 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1)
 	// Get matrix multiplication data.
 	unsigned M = out_shape[-2];
 	unsigned N = out_shape[-1];
-	unsigned K = A._view[-1];
+	unsigned K = transA ? A._view[-2] : A._view[-1];
 
 	// Extract the data.
 	float* out_data = __dataof(out);
@@ -3551,7 +4461,7 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1)
 
 	// Now we actually multiply the matrices.
 	if (out.is_gpu())
-		kernel_ops::matmul(out_data, A_data, B_data, out_shape, A._view, B._view);
+		kernel_ops::matmul(out_data, A_data, B_data, out_shape, A._view, B._view, transA, transB);
 	else
 	{
 		// Create a running shape to count.
@@ -3564,6 +4474,10 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1)
 			reference.remove(-1);
 		}
 		else reference = Shape(1);
+
+		// Important data for transposition.
+		const unsigned A_cols = A._view[-1];
+		const unsigned B_cols = B._view[-1];
 
 		// Iterate through vectors.
 		while (true)
@@ -3587,13 +4501,13 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1)
 				{
 					const unsigned i1 = (i0 + 64 < M) ? (i0 + 64) : M;
 
-					for (unsigned k0 = 0; k0 < K; k0 += 64)
+					for (unsigned j0 = 0; j0 < N; j0 += 64)
 					{
-						const unsigned k1 = (k0 + 64 < K) ? (k0 + 64) : K;
+						const unsigned j1 = (j0 + 64 < N) ? (j0 + 64) : N;
 
-						for (unsigned j0 = 0; j0 < N; j0 += 64)
+						for (unsigned k0 = 0; k0 < K; k0 += 64)
 						{
-							const unsigned j1 = (j0 + 64 < N) ? (j0 + 64) : N;
+							const unsigned k1 = (k0 + 64 < K) ? (k0 + 64) : K;
 
 							for (unsigned i = i0; i < i1; ++i)
 							{
@@ -3601,11 +4515,18 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1)
 
 								for (unsigned k = k0; k < k1; ++k)
 								{
-									const float a = A_matrix[i * K + k];
-									const float* b_row = B_matrix + k * N;
+									const float a = transA
+										? A_matrix[k * A_cols + i]
+										: A_matrix[i * A_cols + k];
 
 									for (unsigned j = j0; j < j1; ++j)
-										c_row[j] += a * b_row[j];
+									{
+										const float b = transB
+											? B_matrix[j * B_cols + k]
+											: B_matrix[k * B_cols + j];
+
+										c_row[j] += a * b;
+									}
 								}
 							}
 						}
@@ -3630,7 +4551,7 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1)
 
 	// If it was a gradient operation store a MatMulOp instance.
 	if (requires_grad)
-		out._internals->op = new MatMulOp(A, B, out);
+		out._internals->op = new MatMulOp(A, B, out, transA, transB);
 
 	// Squeeze back if necessary.
 	if (a_was_1d) out = out.squeeze(-2);
@@ -3640,7 +4561,7 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1)
 	return out;
 }
 
-Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& bias)
+Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& bias, bool transA, bool transB)
 {
 	// Matrix multiplication with bias tensor operator for backpropagation.
 	class MatMulBiasOp : public Tensor::TensorInternals::TensorOp
@@ -3648,10 +4569,13 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& 
 		// Tensor copy storage for the input matrices.
 		Tensor mat0, mat1, bias;
 
+		// Storage for transposition information.
+		bool transA, transB;
+
 	public:
 		// Constructor, stores all the data of the operation.
-		MatMulBiasOp(const Tensor& _mat0, const Tensor& _mat1, const Tensor& _bias, const Tensor& _out) : TensorOp{ "Matrix Multiplication with Bias", _out },
-			mat0{ _mat0 }, mat1{ _mat1 }, bias{ _bias }
+		MatMulBiasOp(const Tensor& _mat0, const Tensor& _mat1, const Tensor& _bias, const Tensor& _out, bool _transA, bool _transB) : TensorOp{ "Matrix Multiplication with Bias", _out },
+			mat0{ _mat0 }, mat1{ _mat1 }, bias{ _bias }, transA{ _transA }, transB{ _transB }
 		{
 			if (mat0.has_grad()) _relatives[0] = &mat0;
 			if (mat1.has_grad()) _relatives[1] = &mat1;
@@ -3662,8 +4586,17 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& 
 		// The broadcasting logic of matmul and the '+=' operator handles shapes.
 		void _backward() override
 		{
-			if (mat0.has_grad()) mat0.internal_gradient() += matmul(out.gradient(), mat1.no_grad().transpose(-1, -2));
-			if (mat1.has_grad()) mat1.internal_gradient() += matmul(mat0.no_grad().transpose(-1, -2), out.gradient());
+			if (mat0.has_grad())
+			{
+				if (transA)	mat0.internal_gradient() += matmul(mat1.no_grad(), out.gradient(),  transB,  true);
+				else		mat0.internal_gradient() += matmul(out.gradient(), mat1.no_grad(), false, !transB);
+
+			}
+			if (mat1.has_grad())
+			{
+				if (transB) mat1.internal_gradient() += matmul(out.gradient(), mat0.no_grad(),  true,  transA);
+				else		mat1.internal_gradient() += matmul(mat0.no_grad(), out.gradient(), !transA, false);
+			}
 			if (bias.has_grad()) bias.internal_gradient() += out.gradient();
 		}
 	};
@@ -3681,6 +4614,14 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& 
 	// Both tensors must be on the same device
 	TENSOR_CHECK(mat0.is_gpu() == mat1.is_gpu() && mat1.is_gpu() == bias.is_gpu(),
 		"Trying to matrix multiply with bias tensors in different devices is not allowed."
+	);
+	TENSOR_CHECK(!transA || mat0.dim() > 1,
+		"Addint a transposition to a single dimensional tensor for a matmul call is not allowed.\n"
+		"Make sure your tensor has at least 2 dimensions if you set 'transA' as true."
+	);
+	TENSOR_CHECK(!transB || mat1.dim() > 1,
+		"Addint a transposition to a single dimensional tensor for a matmul call is not allowed.\n"
+		"Make sure your tensor has at least 2 dimensions if you set 'transB' as true."
 	);
 
 	// Gradiend data.
@@ -3706,7 +4647,7 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& 
 		b = b.unsqueeze(0);
 
 	// Make sure dimensions are compatible.
-	TENSOR_CHECK(A._view[-1] == B._view[-2],
+	TENSOR_CHECK(A._view[transA ? -2 : -1] == B._view[transB ? -1 : -2],
 		"Incompatible dimensions found inside a matmul() call.\n"
 		"Please make sure your tensors follow proper matrix multiplication logic (...,M,K) @ (...,K,N) = (...,M,N).\n"
 		"Matrix0 shape: %s | Matrix1 shape: %s", mat0._view.str(), mat1._view.str()
@@ -3722,12 +4663,17 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& 
 
 	// Prepare output shape.
 	Shape out_shape(A.dim(), (int*)nullptr);
-	out_shape[-1] = B._view[-1];
-	out_shape[-2] = A._view[-2];
+	out_shape[-1] = transB ? B._view[-2] : B._view[-1];
+	out_shape[-2] = transA ? A._view[-1] : A._view[-2];
 	for (unsigned i = 0; i < A.dim() - 2; i++)
 		out_shape[i] = A._view[i] > B._view[i] ? A._view[i] : B._view[i];
 
 	// Make sure bias can be broadcasted to output.
+	TENSOR_CHECK(b.dim() <= out_shape.dim(),
+		"Trying to add a bias to a matmul tensor with more dimensions than the matmul output.\n"
+		"Make sure the bias is broadcastable to the matmul output, bias dimensionality must be less or equal.\n"
+		"Found shapes | Matmul output: %s | Bias: %s", out_shape.str(), b._view.str()
+	);
 	for (unsigned i = 0; i < out_shape.dim(); i++)
 		TENSOR_CHECK(out_shape[i] == b._view[i] || b._view[i] == 1,
 			"Trying to add a bias to a matmul tensor with incompatible shapes.\n"
@@ -3741,7 +4687,7 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& 
 	// Get matrix multiplication data.
 	unsigned M = out_shape[-2];
 	unsigned N = out_shape[-1];
-	unsigned K = A._view[-1];
+	unsigned K = transA ? A._view[-2] : A._view[-1];
 
 	// Extract the data.
 	float* out_data = __dataof(out);
@@ -3751,7 +4697,7 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& 
 
 	// Now we actually multiply the matrices.
 	if (out.is_gpu())
-		kernel_ops::matmul_bias(out_data, A_data, B_data, b_data, out_shape, A._view, B._view, b._view);
+		kernel_ops::matmul_bias(out_data, A_data, B_data, b_data, out_shape, A._view, B._view, b._view, transA, transB);
 	else
 	{
 		// Get bias last dimensions strides.
@@ -3767,6 +4713,10 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& 
 			reference.remove(-1);
 		}
 		else reference = Shape(1);
+
+		// Important data for transposition.
+		const unsigned A_cols = A._view[-1];
+		const unsigned B_cols = B._view[-1];
 
 		// Iterate through vectors.
 		while (true)
@@ -3816,11 +4766,18 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& 
 
 								for (unsigned k = k0; k < k1; ++k)
 								{
-									const float a = A_matrix[i * K + k];
-									const float* b_row = B_matrix + k * N;
+									const float a = transA
+										? A_matrix[k * A_cols + i]
+										: A_matrix[i * A_cols + k];
 
 									for (unsigned j = j0; j < j1; ++j)
-										c_row[j] += a * b_row[j];
+									{
+										const float b = transB
+											? B_matrix[j * B_cols + k]
+											: B_matrix[k * B_cols + j];
+
+										c_row[j] += a * b;
+									}
 								}
 							}
 						}
@@ -3845,7 +4802,7 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& 
 
 	// If it was a gradient operation store a MatMulBiasOp instance.
 	if (requires_grad)
-		out._internals->op = new MatMulBiasOp(A, B, b, out);
+		out._internals->op = new MatMulBiasOp(A, B, b, out, transA, transB);
 
 	// Squeeze back if necessary.
 	if (A_was_1d) out = out.squeeze(-2);
@@ -4000,7 +4957,8 @@ Tensor Functional::mean_squared_error(const Tensor& ten0, const Tensor& ten1)
 		void _backward() override
 		{
 			Tensor derivative = y0.no_grad() - y1.no_grad();
-			derivative *= 2.f * out.gradient().item() / count;
+			derivative.internal_multiply(__dataof(out.gradient()), out.is_gpu(), 2.f / count);
+
 			if (y0.has_grad()) y0.internal_gradient() += derivative;
 			if (y1.has_grad()) y1.internal_gradient() -= derivative;
 		}
@@ -4094,7 +5052,10 @@ Tensor Functional::cross_entropy_loss(const Tensor& logits, const VectorInt& lab
 		// Backpropagation. Gradient is prob_k - y_k.
 		void _backward() override
 		{
-			logits.internal_gradient() += (out.gradient().item() / size) * (probs - labels);
+			Tensor derivative = probs - labels;
+			derivative.internal_multiply(__dataof(out.gradient()), out.is_gpu(), 1.f / size);
+
+			logits.internal_gradient() += derivative;
 		}
 	};
 
@@ -4218,7 +5179,10 @@ Tensor Functional::negative_log_likelihood(const Tensor& probs, const VectorInt&
 		// Backpropagation. Gradient is -out_grad/prob_j if j is the correct label, else 0.
 		void _backward() override
 		{
-			probs.internal_gradient() -= (out.gradient().item() / size) * (labels / probs.no_grad());
+			Tensor derivative = labels / probs.no_grad();
+			derivative.internal_multiply(__dataof(out.gradient()), out.is_gpu(), 1.f / size);
+
+			probs.internal_gradient() -= derivative;
 		}
 	};
 

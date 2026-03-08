@@ -14,9 +14,9 @@ int main()
 	unsigned* testing_labels  = NumberRecognition::getLabels( TESTING, 0,  test_size);
 
 	Tensor train_data({ train_size, IMAGE_DIM }, device);
-	Tensor test_data({ test_size, IMAGE_DIM }, device);
+	Tensor  test_data({  test_size, IMAGE_DIM }, device);
 	VectorInt train_labels(train_size, device);
-	VectorInt test_labels(test_size, device);
+	VectorInt  test_labels( test_size, device);
 
 	for (int i = 0; i < train_size; i++) train_data.internal_set_vector({ i }, training_images[i]);
 	for (int i = 0; i <  test_size; i++)  test_data.internal_set_vector({ i },  testing_images[i]);
@@ -30,15 +30,15 @@ int main()
 
 	printf("MNIST loaded successfully!\n\n");
 
-	int epochs			= 1000;
+	int log_every		= 10;
+	int epochs			= 10000;
 	int batch_size		= 2048;
 	float initial_lr    = 0.100f;
 	float final_lr      = 0.010f;
 	float momentum      = 0.900f;
 	float weight_decay  = 0.005f;
 
-	MLP mlp(IMAGE_DIM, 128, 64, 10);
-	mlp.to(device);
+	MLP mlp(IMAGE_DIM, 128, 64, 10); mlp.to(device);
 	Optimizer::SGD optimizer(mlp, momentum, initial_lr, weight_decay);
 	Scheduler::CosineLR scheduler(optimizer, initial_lr, final_lr, epochs);
 
@@ -77,8 +77,9 @@ int main()
 		}
 		// Test set evaluation.
 		mlp.no_grad();
+		if (epoch % log_every == 0)
 		{
-			float accum_loss = 0.f;
+			Tensor accum_loss({1}, device);
 			int correct_count = 0u;
 			int start = 0u, end = 0u;
 			while (end < test_size)
@@ -94,22 +95,16 @@ int main()
 				// Forward pass.
 				Tensor out = mlp(in);
 				Tensor loss = Functional::cross_entropy_loss(out, labels);
-				accum_loss += loss.item() * (end - start);
+				accum_loss += loss * (end - start);
 
 				// Count corrects.
-				for (unsigned v = 0; v < out.size(0); v++)
-				{
-					out = out.to("cpu");
-					float* logits = out.internal_get_vector({ v });
-					unsigned argmax = 0;
-					for (unsigned i = 1; i < out.size(-1); i++)
-						if (logits[i] > logits[argmax]) argmax = i;
-					// If it is a match increase correct count.
-					if (argmax == labels.get(v)) correct_count++;
-				}
+				VectorInt preds = out.argmax().to("cpu");
+				labels = labels.to("cpu");
+				for (unsigned v = 0; v < end - start; v++)
+					if (preds[v] == labels[v]) correct_count++;
 			}
 			printf("Epoch %04u finished | Learning Rate: %.4f | Loss: %.4f | Accuracy: %.2f%%\n",
-				epoch, optimizer.learning_rate(), accum_loss / test_size, (100.f * correct_count) / test_size
+				epoch, optimizer.learning_rate(), accum_loss.item() / test_size, (100.f * correct_count) / test_size
 			);
 		}
 	}

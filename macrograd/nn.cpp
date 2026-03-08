@@ -140,10 +140,11 @@ void Optimizer::SGD::step()
 	// Do SGD with momentum step.
 	for (unsigned i = 0; i < count; i++)
 	{
-		_gradient_storage[i].internal_multiply(_momentum);
+		_gradient_storage[i].internal_multiply(&_momentum);
 		_gradient_storage[i].internal_add(parameters[i]->internal_gradient());
 
-		parameters[i]->internal_multiply(1.f - _learning_rate * _weight_decay);
+		float decay_factor = 1.f - _learning_rate * _weight_decay;
+		parameters[i]->internal_multiply(&decay_factor);
 		parameters[i]->internal_add_prod(-_learning_rate, _gradient_storage[i]);
 	}
 }
@@ -198,11 +199,11 @@ void Optimizer::AdamW::step()
 		Tensor& grad = parameters[i]->internal_gradient();
 
 		// Update first momentum.
-		_moment1[i].internal_multiply(_beta1);
+		_moment1[i].internal_multiply(&_beta1);
 		_moment1[i].internal_add_prod(1.f - _beta1, grad);
 
 		// Update second momentum.
-		_moment2[i].internal_multiply(_beta2);
+		_moment2[i].internal_multiply(&_beta2);
 		_moment2[i].internal_add_prod(1.f - _beta2, grad.square());
 
 		// Step corrections.
@@ -210,7 +211,8 @@ void Optimizer::AdamW::step()
 		Tensor v_hat = _moment2[i] / bc2;
 
 		// Update parameters. 
-		parameters[i]->internal_multiply(1.f - _learning_rate * _weight_decay);
+		float decay_factor = 1.f - _learning_rate * _weight_decay;
+		parameters[i]->internal_multiply(&decay_factor);
 		parameters[i]->internal_add_prod(-_learning_rate, m_hat / (v_hat.sqrt() + _eps));
 	}
 }
