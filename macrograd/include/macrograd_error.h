@@ -1,4 +1,26 @@
 #pragma once
+
+/* LICENSE AND COPYRIGHT
+--------------------------------------------------------------------------------------------------------------------------
+ * Macrograd - a CUDA/C++ Autograd Tensor Library
+ * Copyright (c) 2026 Miguel Nasarre Budiño
+ * Licensed under the MIT License. See LICENSE file.
+--------------------------------------------------------------------------------------------------------------------------
+*/
+
+/* MACROGRAD ERROR CLASS HEADER
+--------------------------------------------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------------------------------------------------
+
+
+
+
+
+--------------------------------------------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------------------------------------------------
+*/
+
+// Include dependencies.
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,7 +53,7 @@ public:
 	[[noreturn]] void PrintAbort() const
 	{
 		fprintf(stderr,
-			"Tensor Error Occurred:\n"
+			"Macrograd Error Occurred:\n"
 			"Line: %u\n"
 			"File: %s\n"
 			"Message: %s\n",
@@ -53,11 +75,7 @@ private:
 */
 
 // Creates and prints an error.
-#define TENSOR_ERROR(...) MacrogradError(__LINE__,__FILE__,__VA_ARGS__).PrintAbort()
+#define MACROGRAD_ERROR(...) MacrogradError(__LINE__,__FILE__,__VA_ARGS__).PrintAbort()
 
 // Checks expression, if false raises an error.
-#ifndef NDEBUG
-#define TENSOR_CHECK(expr, ...) do { if (!(expr)) { TENSOR_ERROR(__VA_ARGS__); } } while(0)
-#else
-#define TENSOR_CHECK(expr, ...) {}
-#endif
+#define MACROGRAD_CHECK(expr, ...) do { if (!(expr)) { MACROGRAD_ERROR(__VA_ARGS__); } } while(0)

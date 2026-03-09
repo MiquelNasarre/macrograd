@@ -1,5 +1,28 @@
 #pragma once
+
+/* LICENSE AND COPYRIGHT
+--------------------------------------------------------------------------------------------------------------------------
+ * Macrograd - a CUDA/C++ Autograd Tensor Library
+ * Copyright (c) 2026 Miguel Nasarre Budiño
+ * Licensed under the MIT License. See LICENSE file.
+--------------------------------------------------------------------------------------------------------------------------
+*/
+
+/* MACROGRAD NEURAL NETWORK EXTENSION HEADER
+--------------------------------------------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------------------------------------------------
+
+
+
+
+
+--------------------------------------------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------------------------------------------------
+*/
+
+// Include main library header.
 #include "macrograd.h"
+
 
 class Module
 {
@@ -30,6 +53,10 @@ public:
 	Tensor** get_parameters()					{ return _parameters;		}
 	const Tensor* const* get_parameters() const	{ return _parameters;		}
 	unsigned get_parameter_count() const		{ return _parameter_count;	}
+
+public:
+	void save_weights(const char* path = "model.mg") const;
+	void load_weights(const char* path = "model.mg");
 };
 
 class Optim

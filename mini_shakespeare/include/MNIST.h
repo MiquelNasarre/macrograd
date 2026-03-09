@@ -1,5 +1,8 @@
 #pragma once
 #include <cstdint>
+#include <math.h>
+#include "macrograd_nn.h"
+#include "macrograd_error.h"
 
 /* MNIST DATASET HELPER CLASS HEADER
 -------------------------------------------------------------------------------------------------------
@@ -21,99 +24,184 @@ obtain a pointer to the images and labels, and training values for subsets.
 #define IMG_COLS 28u
 #define IMG_PIXELS (IMG_ROWS * IMG_COLS)
 
+// Paths for the MNIST files
+
+#define MNIST_TRAINING_IMAGES_PATH MNIST_PATH "train-images.idx3-ubyte"
+#define MNIST_TRAINING_LABELS_PATH MNIST_PATH "train-labels.idx1-ubyte"
+#define MNIST_TESTING_IMAGES_PATH MNIST_PATH "t10k-images.idx3-ubyte"
+#define MNIST_TESTING_LABELS_PATH MNIST_PATH "t10k-labels.idx1-ubyte"
+
 // Simple static class to handle the loading of the MNIST dataset for handwritten digits.
 class MNIST
 {
 private:
+	static inline Tensor trainingImages;
+	static inline Tensor testingImages;
 
-	static inline uint8_t** trainingSetImages = nullptr;	// MNIST pointer to the training images
-	static inline uint8_t** testingSetImages = nullptr;		// MNIST pointer to the testing images
+	static inline VectorInt trainingLabels;
+	static inline VectorInt testingLabels;
 
-	static inline uint8_t* trainingSetLabels = nullptr;		// MNIST pointer to the training labels
-	static inline uint8_t* testingSetLabels = nullptr;		// MNIST pointer to the testing labels
+	// Static helper to read 32bits from a file.
+	static inline uint32_t read_be_u32(FILE* f)
+	{
+		uint8_t b[4];
+		if (fread(b, 1, 4, f) != 4)
+			return 0xFFFFFFFFu;
 
-	static inline size_t n_training_images = 0;				// Total images loaded from the training set
-	static inline size_t n_testing_images = 0;				// Total images loaded from the testing set
+		return ((uint32_t)b[0] << 24) | ((uint32_t)b[1] << 16) | ((uint32_t)b[2] << 8) | ((uint32_t)b[3]);
+	}
 
-	static MNIST helper;	// Helper to call the destructor at the end of the program
+	// Reads the file data and creates the dataset tensors and label vectors.
+	static void init_tensors()
+	{
+		if (trainingImages.is_init())
+			return;
 
-	// When the program ends the helper will call the destructor,
-	// freeing the dataset if this was loaded.
-	~MNIST();
-	MNIST() = default;
+		FILE* training_images_file = nullptr;
+		FILE* testing_images_file = nullptr;
+		FILE* training_labels_file = nullptr;
+		FILE* testing_labels_file = nullptr;
+
+		// Open files
+		fopen_s(&training_images_file, MNIST_TRAINING_IMAGES_PATH, "rb");
+		fopen_s(&testing_images_file, MNIST_TESTING_IMAGES_PATH, "rb");
+		fopen_s(&training_labels_file, MNIST_TRAINING_LABELS_PATH, "rb");
+		fopen_s(&testing_labels_file, MNIST_TESTING_LABELS_PATH, "rb");
+
+		MACROGRAD_CHECK(training_images_file, "[MNIST] Failed to open '%s'\n", MNIST_TRAINING_IMAGES_PATH);
+		MACROGRAD_CHECK(testing_images_file, "[MNIST] Failed to open '%s'\n", MNIST_TESTING_IMAGES_PATH);
+		MACROGRAD_CHECK(training_labels_file, "[MNIST] Failed to open '%s'\n", MNIST_TRAINING_LABELS_PATH);
+		MACROGRAD_CHECK(testing_labels_file, "[MNIST] Failed to open '%s'\n", MNIST_TESTING_LABELS_PATH);
+
+		// Read Headers
+		// Training
+		const uint32_t magic_i0 = read_be_u32(training_images_file);
+		const uint32_t count_i0 = read_be_u32(training_images_file);
+		const uint32_t rows0 = read_be_u32(training_images_file);
+		const uint32_t cols0 = read_be_u32(training_images_file);
+		const uint32_t magic_l0 = read_be_u32(training_labels_file);
+		const uint32_t count_l0 = read_be_u32(training_labels_file);
+
+		// Testing
+		const uint32_t magic_i1 = read_be_u32(testing_images_file);
+		const uint32_t count_i1 = read_be_u32(testing_images_file);
+		const uint32_t rows1 = read_be_u32(testing_images_file);
+		const uint32_t cols1 = read_be_u32(testing_images_file);
+		const uint32_t magic_l1 = read_be_u32(testing_labels_file);
+		const uint32_t count_l1 = read_be_u32(testing_labels_file);
+
+		// Make sure there is nothing weird going on here
+
+		MACROGRAD_CHECK(magic_i0 == 0x00000803u, "[MNIST] Bad image magic: 0x%08X (expected 0x00000803)\n", magic_i0);
+		MACROGRAD_CHECK(magic_i1 == 0x00000803u, "[MNIST] Bad image magic: 0x%08X (expected 0x00000803)\n", magic_i1);
+		MACROGRAD_CHECK(magic_l0 == 0x00000801u, "[MNIST] Bad label magic: 0x%08X (expected 0x00000801)\n", magic_l0);
+		MACROGRAD_CHECK(magic_l1 == 0x00000801u, "[MNIST] Bad label magic: 0x%08X (expected 0x00000801)\n", magic_l1);
+		MACROGRAD_CHECK(rows0 == IMG_ROWS && cols0 == IMG_COLS, "[MNIST] Unexpected image dims: %u x %u (expected 28 x 28)\n", rows0, cols0);
+		MACROGRAD_CHECK(rows1 == IMG_ROWS && cols1 == IMG_COLS, "[MNIST] Unexpected image dims: %u x %u (expected 28 x 28)\n", rows1, cols1);
+		MACROGRAD_CHECK(count_l0 == count_i0, "[MNIST] Count mismatch (images=%u, labels=%u)\n", count_i0, count_l0);
+		MACROGRAD_CHECK(count_l1 == count_i1, "[MNIST] Count mismatch (images=%u, labels=%u)\n", count_i1, count_l1);
+		MACROGRAD_CHECK(count_i0 != 0, "[MNIST] No images in file.\n");
+		MACROGRAD_CHECK(count_i1 != 0, "[MNIST] No images in file.\n");
+
+		uint32_t n_training = count_i0;
+		uint32_t n_testing = count_i1;
+
+		uint8_t* training_labels = new uint8_t[n_training];
+		uint8_t* testing_labels = new uint8_t[n_testing];
+
+		uint8_t* raw_training_images = new uint8_t[n_training * IMG_PIXELS];
+		uint8_t* raw_testing_images = new uint8_t[n_testing * IMG_PIXELS];
+
+		// Read labels
+		if (fread(training_labels, 1, n_training, training_labels_file) != n_training)
+			MACROGRAD_ERROR("[MNIST] Unexpected EOF while reading training labels.\n");
+		if (fread(testing_labels, 1, n_testing, testing_labels_file) != n_testing)
+			MACROGRAD_ERROR("[MNIST] Unexpected EOF while reading testing labels.\n");
+
+		// Read images
+		if (fread(raw_training_images, 1, IMG_PIXELS * n_training, training_images_file) != IMG_PIXELS * n_training)
+			MACROGRAD_ERROR("[MNIST] Unexpected EOF while reading training images.\n");
+		if (fread(raw_testing_images, 1, IMG_PIXELS * n_testing, testing_images_file) != IMG_PIXELS * n_testing)
+			MACROGRAD_ERROR("[MNIST] Unexpected EOF while reading testing images.\n");
+
+		fclose(training_images_file);
+		fclose(training_labels_file);
+		fclose(testing_images_file);
+		fclose(testing_labels_file);
+
+		trainingImages = Tensor({ n_training, IMG_PIXELS });
+		testingImages = Tensor({ n_testing, IMG_PIXELS });
+
+		trainingLabels = VectorInt((unsigned)n_training);
+		testingLabels = VectorInt((unsigned)n_testing);
+
+		for (unsigned i = 0; i < n_training; i++)
+			trainingLabels[i] = (unsigned)training_labels[i];
+
+		for (unsigned i = 0; i < n_testing; i++)
+			testingLabels[i] = (unsigned)testing_labels[i];
+
+		float* training_data = trainingImages.internal_data();
+		float* testing_data = testingImages.internal_data();
+
+		for (unsigned i = 0; i < n_training; i++)
+			for (unsigned p = 0; p < IMG_PIXELS; p++)
+				training_data[i * IMG_PIXELS + p] = float(raw_training_images[i * IMG_PIXELS + p]) / 256.f;
+
+		for (unsigned i = 0; i < n_testing; i++)
+			for (unsigned p = 0; p < IMG_PIXELS; p++)
+				testing_data[i * IMG_PIXELS + p] = float(raw_testing_images[i * IMG_PIXELS + p]) / 256.f;
+
+		// Delete temporary image storage.
+		delete[] training_labels;
+		delete[] testing_labels;
+		delete[] raw_training_images;
+		delete[] raw_testing_images;
+
+		// Normalize the data.
+		trainingImages -= trainingImages.mean(-1, true);
+		trainingImages /= trainingImages.std(-1, true);
+		testingImages -= testingImages.mean(-1, true);
+		testingImages /= testingImages.std(-1, true);
+	}
 
 public:
+	static const Tensor getTrainingImages() { init_tensors(); return trainingImages; }
+	static const Tensor  getTestingImages() { init_tensors(); return  testingImages; }
 
-	// Loads the files for the dataset and stores the images in RAM.
-	static void loadDataSet();
+	static const VectorInt getTrainingLabels() { init_tensors(); return trainingLabels; }
+	static const VectorInt  getTestingLabels() { init_tensors(); return  testingLabels; }
 
-	// Returns the pointer to the training images as a uint8_t**.
-	static uint8_t** getTrainingSetImages();
+	// To release tensor memory from cache.
+	static void resetTensors()
+	{
+		trainingImages = Tensor();
+		testingImages  = Tensor();
+		trainingLabels = VectorInt();
+		testingLabels  = VectorInt();
+	}
 
-	// Returns the pointer to the training lables as an uint8_t*.
-	static uint8_t* getTrainingSetLabels();
-
-	// Returns the pointer to the testing images as a uint8_t**.
-	static uint8_t** getTestingSetImages();
-
-	// Returns the pointer to the testing lables as an uint8_t*.
-	static uint8_t* getTestingSetLabels();
-
-	// Returns the numpber of images stored in the training dataset.
-	static size_t get_n_training_images();
-
-	// Returns the numpber of images stored in the testing dataset.
-	static size_t get_n_testing_images();
-
-#ifdef _CONSOLE
 	// Simple function to print the images in the console.
-	static void consolePrint(uint8_t* image);
-#endif
+	static void consolePrint(float* image)
+	{
+		system("color");
+		printf("\033[0;34m");
+		for (unsigned int r = 0; r < IMG_ROWS; r++)
+		{
+			for (unsigned int c = 0; c < IMG_COLS; c++)
+			{
+				if (image[c + r * IMG_COLS] > 0.f)
+					printf("\033[0;34m");
+				else
+					printf("\033[0;31m");
+
+				printf("%c%c", 219, 219);
+			}
+			printf("\n");
+		}
+		printf("\033[0m");
+	}
 };
-
-
-#define IMAGE_DIM 784
-
-enum Set
-{
-	TESTING,
-	TRAINING
-};
-
-class NumberRecognition
-{
-private:
-
-	static inline unsigned* trainingLabels;
-	static inline unsigned* testingLabels;
-
-	static inline float** trainingImages;
-	static inline float** testingImages;
-
-	static inline float** trainingValues;
-	static inline float** testingValues;
-
-	static inline unsigned n_training;
-	static inline unsigned n_testing;
-
-	static NumberRecognition loader;
-
-	NumberRecognition();
-	~NumberRecognition();
-public:
-
-	static float** getImages(Set test_train, size_t start_idx, size_t end_idx);
-
-	static unsigned* getLabels(Set test_train, size_t start_idx, size_t end_idx);
-
-	static void printImage(Set test_train, size_t idx);
-
-	static unsigned getSize(Set test_train);
-};
-
-#include "macrograd_nn.h"
-#include <math.h>
-#include <stdio.h>
 
 class Linear : public Module
 {
@@ -187,45 +275,38 @@ public:
 	}
 };
 
-static void run_mlp_training_run()
+static void run_mlp_training_run(int epochs = 10000, const char* device = "cuda", const char* load_path = nullptr)
 {
 	constexpr int train_size = 50000;
 	constexpr int test_size  = 10000;
 
-	float** training_images   = NumberRecognition::getImages(TRAINING, 0, train_size);
-	unsigned* training_labels = NumberRecognition::getLabels(TRAINING, 0, train_size);
-	float** testing_images    = NumberRecognition::getImages( TESTING, 0,  test_size);
-	unsigned* testing_labels  = NumberRecognition::getLabels( TESTING, 0,  test_size);
-
-	Tensor train_data({ train_size, IMAGE_DIM });
-	Tensor test_data({ test_size, IMAGE_DIM });
-	VectorInt train_labels(train_size); 
-	VectorInt test_labels(test_size);
-
-	for (int i = 0; i < train_size; i++) train_data.internal_set_vector({ i }, training_images[i]);
-	for (int i = 0; i <  test_size; i++)  test_data.internal_set_vector({ i },  testing_images[i]);
-	for (int i = 0; i < train_size; i++) train_labels[i] = training_labels[i];
-	for (int i = 0; i <  test_size; i++)  test_labels[i] =  testing_labels[i];
-
-	train_data -= train_data.mean(-1, true);
-	train_data /= train_data.std(-1, true);
-	test_data -= test_data.mean(-1, true);
-	test_data /= test_data.std(-1, true);
+	Tensor train_data = MNIST::getTrainingImages().to(device);
+	Tensor  test_data = MNIST::getTestingImages().to(device);
+	VectorInt train_labels = MNIST::getTrainingLabels().to(device);
+	VectorInt  test_labels = MNIST::getTestingLabels().to(device);
+	// Clear CPU cache.
+	MNIST::resetTensors();
 
 	printf("MNIST loaded successfully!\n\n");
 
-	int epochs			= 1000;
-	int batch_size		= 256;
-	float initial_lr    = 0.020f;
-	float final_lr      = 0.002f;
+	int log_every		= 10;
+	int batch_size		= 2048;
+	float initial_lr    = 0.100f;
+	float final_lr      = 0.010f;
 	float momentum      = 0.900f;
 	float weight_decay  = 0.005f;
 
-	MLP mlp(IMAGE_DIM, 128, 64, 10);
+	MLP mlp(IMG_PIXELS, 128, 64, 10); mlp.to(device);
+	if (load_path)
+	{
+		mlp.load_weights(load_path);
+		printf("[ Weights correctly loaded from \"%s\" ]\n\n", load_path);
+	}
+
 	Optimizer::SGD optimizer(mlp, momentum, initial_lr, weight_decay);
 	Scheduler::CosineLR scheduler(optimizer, initial_lr, final_lr, epochs);
 
-	VectorInt randperm(0, train_size);
+	VectorInt randperm(0, train_size, 1, device);
 
 	for (int epoch = 1; epoch < epochs + 1; epoch++)
 	{
@@ -244,8 +325,8 @@ static void run_mlp_training_run()
 				end = (train_size < start + batch_size) ? train_size : start + batch_size;
 
 				// Get input tensor.
-				Tensor in = perm_train_data[{start, end}];
-				VectorInt labels = perm_train_labels[{start, end}];
+				Tensor in = perm_train_data.subset({ end - start }, { start });
+				VectorInt labels = perm_train_labels.subset(start, end);
 
 				// Forward pass.
 				Tensor out = mlp(in);
@@ -260,8 +341,9 @@ static void run_mlp_training_run()
 		}
 		// Test set evaluation.
 		mlp.no_grad();
+		if (epoch % log_every == 0)
 		{
-			float accum_loss = 0.f;
+			Tensor accum_loss({1}, device);
 			int correct_count = 0u;
 			int start = 0u, end = 0u;
 			while (end < test_size)
@@ -271,28 +353,70 @@ static void run_mlp_training_run()
 				end = (test_size < start + batch_size) ? test_size : start + batch_size;
 
 				// Get input tensor.
-				Tensor in = test_data[{start, end}];
-				VectorInt labels = test_labels[{start, end}];
+				Tensor in = test_data.subset({ end - start }, { start });
+				VectorInt labels = test_labels.subset(start, end);
 
 				// Forward pass.
-				Tensor out = mlp(in);
-				Tensor loss = Functional::cross_entropy_loss(out, labels);
-				accum_loss += loss.item() * (end - start);
+				Tensor logits = mlp(in);
+				Tensor loss = Functional::cross_entropy_loss(logits, labels);
+				accum_loss += loss * float(end - start);
 
 				// Count corrects.
-				for (unsigned v = 0; v < out.size(0); v++)
-				{
-					float* logits = out.internal_get_vector({ v });
-					unsigned argmax = 0;
-					for (unsigned i = 1; i < out.size(-1); i++)
-						if (logits[i] > logits[argmax]) argmax = i;
-					// If it is a match increase correct count.
-					if (argmax == labels[v]) correct_count++;
-				}
+				VectorInt preds = logits.argmax().to("cpu");
+				labels = labels.to("cpu");
+				for (int v = 0; v < end - start; v++)
+					if (preds[v] == labels[v]) correct_count++;
 			}
 			printf("Epoch %04u finished | Learning Rate: %.4f | Loss: %.4f | Accuracy: %.2f%%\n",
-				epoch, optimizer.learning_rate(), accum_loss / test_size, (100.f * correct_count) / test_size
+				epoch, optimizer.learning_rate(), accum_loss.item() / test_size, (100.f * correct_count) / test_size
 			);
 		}
+	}
+	printf("\nFinished training MLP on MNIST for %i epoch.", epochs);
+
+	
+	size_t seed; char c;
+	// --- Model showcase ---
+image_loop:
+	printf("\nDo you want to see a test set image? (y/n/s) ");
+	scanf_s(" %c", &c, 1);
+	if (c == 'y' || c == 'Y')
+	{
+		mlp.no_grad();
+		{
+			unsigned idx = Random::rand_int(0, test_size - 1);
+			Tensor image = test_data[idx];
+			Tensor preds = mlp(image).softmax(-1).to("cpu");
+			image = image.to("cpu");
+			printf("\n");
+			for (int _ = 0; _ < 56; _++)printf("-"); printf("\n");
+			MNIST::consolePrint(image.internal_data());
+			for (int _ = 0; _ < 56; _++)printf("-"); printf("\n");
+			float* preds_data = preds.internal_data();
+			printf("Predicted probabilities:\n");
+			for (unsigned i = 0; i < preds.numel(); i++)
+				printf("[ %u ]  %.2f%%\n", i, preds_data[i] * 100);
+		}
+		goto image_loop;
+	}
+	// --- Random seeding ---
+	if (c == 's' || c == 'S')
+	{
+		printf("Set a different random seed: ");
+		scanf_s(" %llu", &seed);
+		Random::set_seed(seed);
+		goto image_loop;
+	}
+	// --- Model weights saving ---
+	printf("\nDo you want to save the model weights? (y/n) ");
+	scanf_s(" %c", &c, 1);
+	if (c == 'y')
+	{
+		char save_path[128];
+		printf("Specify a valid save path for the file: ");
+		scanf_s(" %127s", &save_path, 128);
+
+		mlp.save_weights(save_path);
+		printf("[ Weights successfully saved to \"%s\" ]\n", save_path);
 	}
 }

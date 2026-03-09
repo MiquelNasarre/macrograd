@@ -43,12 +43,12 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
     <OutDir>$(ProjectDir)lib\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir).intermediate\$(Configuration)\</IntDir>
+    <IntDir>$(SolutionDir).intermediate\$(ProjectName)\$(Configuration)\</IntDir>
     <TargetName>$(ProjectName)_d</TargetName>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <OutDir>$(ProjectDir)lib\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir).intermediate\$(Configuration)\</IntDir>
+    <IntDir>$(SolutionDir).intermediate\$(ProjectName)\$(Configuration)\</IntDir>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
@@ -109,7 +109,7 @@
     <ClInclude Include="include\macrograd_nn.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="nn.cpp" />
+    <ClCompile Include="source\nn.cpp" />
     <ClCompile Include="source\tensor.cpp" />
     <ClCompile Include="source\tensor_ops.cpp" />
   </ItemGroup>

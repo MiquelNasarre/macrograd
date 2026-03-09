@@ -36,10 +36,11 @@ template<class T>
 inline T __shfl_down_sync(unsigned, T x, int) { return x; }
 #endif
 
-// Checks CUDA expression, if 'cudaError != cudaSuccess' raises a TENSOR_ERROR. 
+// Checks CUDA expression, if 'cudaError != cudaSuccess' raises a 
+// . 
 #ifndef NDEBUG
-#define CUDA_CHECK(x)       do { cudaError_t err = (x); if(err != cudaSuccess) TENSOR_ERROR("(CUDA ERROR)\n%s\n", cudaGetErrorString(err)); } while(0)
-#define CUBLAS_CHECK(x)     do { cublasStatus_t _s = (x); if (_s != CUBLAS_STATUS_SUCCESS) TENSOR_ERROR("(CUBLAS ERROR)\nError Code: 0x%08X", _s); } while(0)
+#define CUDA_CHECK(x)       do { cudaError_t err = (x); if(err != cudaSuccess) MACROGRAD_ERROR("(CUDA ERROR)\n%s\n", cudaGetErrorString(err)); } while(0)
+#define CUBLAS_CHECK(x)     do { cublasStatus_t _s = (x); if (_s != CUBLAS_STATUS_SUCCESS) MACROGRAD_ERROR("(CUBLAS ERROR)\nError Code: 0x%08X", _s); } while(0)
 #else
 #define CUDA_CHECK(x)       (x)
 #define CUBLAS_CHECK(x)     (x)
@@ -1691,7 +1692,7 @@ void kernel_ops::pow(void* out_data, const void* in_data, float exp, size_t num_
 --------------------------------------------------------------------------------------------------------------------------
 */
 
-#define CURAND_CHECK(x) do { curandStatus_t st = (x); if (st != CURAND_STATUS_SUCCESS) TENSOR_ERROR("cuRAND error"); } while(0)
+#define CURAND_CHECK(x) do { curandStatus_t st = (x); if (st != CURAND_STATUS_SUCCESS) MACROGRAD_ERROR("cuRAND error"); } while(0)
 
 class rng
 {
@@ -1920,7 +1921,7 @@ __inline__ __device__ Welford welford_merge(Welford w)
 }
 
 template<int BLOCK>
-__global__ void sum_lastdim_vec(float* __restrict__ out, const float* __restrict__ in, int element_count)
+__global__ void sum_lastdim_vec(float* __restrict__ out, const float* __restrict__ in, size_t element_count)
 {
     int row = blockIdx.x;
 
@@ -1951,7 +1952,7 @@ __global__ void sum_lastdim_vec(float* __restrict__ out, const float* __restrict
         out[row] = sum;
 }
 template<int BLOCK>
-__global__ void sum_dim_strided(float* __restrict__ out, const float* __restrict__ in, int element_stride, int element_count)
+__global__ void sum_dim_strided(float* __restrict__ out, const float* __restrict__ in, size_t element_stride, size_t element_count)
 {
     int row = blockIdx.x;
 
@@ -1971,7 +1972,7 @@ __global__ void sum_dim_strided(float* __restrict__ out, const float* __restrict
     if (threadIdx.x == 0)
         out[row] = sum;
 }
-void kernel_ops::sum(void* out_data, const void* in_data, int element_stride, int element_count, int rows)
+void kernel_ops::sum(void* out_data, const void* in_data, size_t element_stride, size_t element_count, size_t rows)
 {
     constexpr int BLOCK = DEFAULT_BLOCK_SIZE;
 
@@ -1981,7 +1982,7 @@ void kernel_ops::sum(void* out_data, const void* in_data, int element_stride, in
     // If can use the fast kernel use it.
     if (element_stride == 1)
     {
-        CUDA_LAUNCH(sum_lastdim_vec<BLOCK>, rows, BLOCK,
+        CUDA_LAUNCH(sum_lastdim_vec<BLOCK>, (unsigned)rows, BLOCK,
             (float*)out_data,
             (const float*)in_data,
             element_count
@@ -1991,7 +1992,7 @@ void kernel_ops::sum(void* out_data, const void* in_data, int element_stride, in
     // Else use the strided kernel.
     else
     {
-        CUDA_LAUNCH(sum_dim_strided<BLOCK>, rows, BLOCK,
+        CUDA_LAUNCH(sum_dim_strided<BLOCK>, (unsigned)rows, BLOCK,
             (float*)out_data,
             (const float*)in_data,
             element_stride,
@@ -2002,7 +2003,7 @@ void kernel_ops::sum(void* out_data, const void* in_data, int element_stride, in
 }
 
 template<int BLOCK>
-__global__ void mean_lastdim_vec(float* __restrict__ out, const float* __restrict__ in, int element_count)
+__global__ void mean_lastdim_vec(float* __restrict__ out, const float* __restrict__ in, size_t  element_count)
 {
     int row = blockIdx.x;
 
@@ -2033,7 +2034,7 @@ __global__ void mean_lastdim_vec(float* __restrict__ out, const float* __restric
         out[row] = sum / element_count;
 }
 template<int BLOCK>
-__global__ void mean_dim_strided(float* __restrict__ out, const float* __restrict__ in, int element_stride, int element_count)
+__global__ void mean_dim_strided(float* __restrict__ out, const float* __restrict__ in, size_t element_stride, size_t element_count)
 {
     int row = blockIdx.x;
 
@@ -2053,7 +2054,7 @@ __global__ void mean_dim_strided(float* __restrict__ out, const float* __restric
     if (threadIdx.x == 0)
         out[row] = sum / element_count;
 }
-void kernel_ops::mean(void* out_data, const void* in_data, int element_stride, int element_count, int rows)
+void kernel_ops::mean(void* out_data, const void* in_data, size_t element_stride, size_t element_count, size_t rows)
 {
     constexpr int BLOCK = DEFAULT_BLOCK_SIZE;
 
@@ -2063,7 +2064,7 @@ void kernel_ops::mean(void* out_data, const void* in_data, int element_stride, i
     // If can use the fast kernel use it.
     if (element_stride == 1)
     {
-        CUDA_LAUNCH(mean_lastdim_vec<BLOCK>, rows, BLOCK,
+        CUDA_LAUNCH(mean_lastdim_vec<BLOCK>, (unsigned)rows, BLOCK,
             (float*)out_data,
             (const float*)in_data,
             element_count
@@ -2073,7 +2074,7 @@ void kernel_ops::mean(void* out_data, const void* in_data, int element_stride, i
     // Else use the strided kernel.
     else
     {
-        CUDA_LAUNCH(mean_dim_strided<BLOCK>, rows, BLOCK,
+        CUDA_LAUNCH(mean_dim_strided<BLOCK>, (unsigned)rows, BLOCK,
             (float*)out_data,
             (const float*)in_data,
             element_stride,
@@ -2084,7 +2085,7 @@ void kernel_ops::mean(void* out_data, const void* in_data, int element_stride, i
 }
 
 template<int BLOCK>
-__global__ void var_lastdim_vec(float* __restrict__ out, const float* __restrict__ in, int element_count)
+__global__ void var_lastdim_vec(float* __restrict__ out, const float* __restrict__ in, size_t element_count)
 {
     int row = blockIdx.x;
 
@@ -2112,7 +2113,7 @@ __global__ void var_lastdim_vec(float* __restrict__ out, const float* __restrict
         out[row] = w.M2 / element_count;
 }
 template<int BLOCK>
-__global__ void var_dim_strided(float* __restrict__ out, const float* __restrict__ in, int element_stride, int element_count)
+__global__ void var_dim_strided(float* __restrict__ out, const float* __restrict__ in, size_t element_stride, size_t element_count)
 {
     int row = blockIdx.x;
 
@@ -2132,7 +2133,7 @@ __global__ void var_dim_strided(float* __restrict__ out, const float* __restrict
     if (threadIdx.x == 0)
         out[row] = w.M2 / element_count;
 }
-void kernel_ops::var(void* out_data, const void* in_data, int element_stride, int element_count, int rows)
+void kernel_ops::var(void* out_data, const void* in_data, size_t element_stride, size_t element_count, size_t rows)
 {
     constexpr int BLOCK = DEFAULT_BLOCK_SIZE;
 
@@ -2142,7 +2143,7 @@ void kernel_ops::var(void* out_data, const void* in_data, int element_stride, in
     // If can use the fast kernel use it.
     if (element_stride == 1)
     {
-        CUDA_LAUNCH(var_lastdim_vec<BLOCK>, rows, BLOCK,
+        CUDA_LAUNCH(var_lastdim_vec<BLOCK>, (unsigned)rows, BLOCK,
             (float*)out_data,
             (const float*)in_data,
             element_count
@@ -2152,7 +2153,7 @@ void kernel_ops::var(void* out_data, const void* in_data, int element_stride, in
     // Else use the strided kernel.
     else
     {
-        CUDA_LAUNCH(var_dim_strided<BLOCK>, rows, BLOCK,
+        CUDA_LAUNCH(var_dim_strided<BLOCK>, (unsigned)rows, BLOCK,
             (float*)out_data,
             (const float*)in_data,
             element_stride,
@@ -2163,7 +2164,7 @@ void kernel_ops::var(void* out_data, const void* in_data, int element_stride, in
 }
 
 template<int BLOCK>
-__global__ void std_lastdim_vec(float* __restrict__ out, const float* __restrict__ in, int element_count)
+__global__ void std_lastdim_vec(float* __restrict__ out, const float* __restrict__ in, size_t element_count)
 {
     int row = blockIdx.x;
 
@@ -2191,7 +2192,7 @@ __global__ void std_lastdim_vec(float* __restrict__ out, const float* __restrict
         out[row] = sqrtf(w.M2 / element_count);
 }
 template<int BLOCK>
-__global__ void std_dim_strided(float* __restrict__ out, const float* __restrict__ in, int element_stride, int element_count)
+__global__ void std_dim_strided(float* __restrict__ out, const float* __restrict__ in, size_t element_stride, size_t element_count)
 {
     int row = blockIdx.x;
 
@@ -2211,7 +2212,7 @@ __global__ void std_dim_strided(float* __restrict__ out, const float* __restrict
     if (threadIdx.x == 0)
         out[row] = sqrtf(w.M2 / element_count);
 }
-void kernel_ops::std(void* out_data, const void* in_data, int element_stride, int element_count, int rows)
+void kernel_ops::std(void* out_data, const void* in_data, size_t element_stride, size_t element_count, size_t rows)
 {
     constexpr int BLOCK = DEFAULT_BLOCK_SIZE;
 
@@ -2221,7 +2222,7 @@ void kernel_ops::std(void* out_data, const void* in_data, int element_stride, in
     // If can use the fast kernel use it.
     if (element_stride == 1)
     {
-        CUDA_LAUNCH(std_lastdim_vec<BLOCK>, rows, BLOCK,
+        CUDA_LAUNCH(std_lastdim_vec<BLOCK>, (unsigned)rows, BLOCK,
             (float*)out_data,
             (const float*)in_data,
             element_count
@@ -2231,7 +2232,7 @@ void kernel_ops::std(void* out_data, const void* in_data, int element_stride, in
     // Else use the strided kernel.
     else
     {
-        CUDA_LAUNCH(std_dim_strided<BLOCK>, rows, BLOCK,
+        CUDA_LAUNCH(std_dim_strided<BLOCK>, (unsigned)rows, BLOCK,
             (float*)out_data,
             (const float*)in_data,
             element_stride,
@@ -2242,7 +2243,7 @@ void kernel_ops::std(void* out_data, const void* in_data, int element_stride, in
 }
 
 template<int BLOCK>
-__global__ void softmax_lastdim(float* __restrict__ out, const float* __restrict__ in, int element_count)
+__global__ void softmax_lastdim(float* __restrict__ out, const float* __restrict__ in, size_t element_count)
 {
     int row = blockIdx.x;
 
@@ -2284,7 +2285,7 @@ __global__ void softmax_lastdim(float* __restrict__ out, const float* __restrict
         base_out[i] *= inv_s;
 }
 template<int BLOCK>
-__global__ void softmax_dim_strided(float* __restrict__ out, const float* __restrict__ in, int element_stride, int element_count)
+__global__ void softmax_dim_strided(float* __restrict__ out, const float* __restrict__ in, size_t element_stride, size_t element_count)
 {
     int row = blockIdx.x;
 
@@ -2330,7 +2331,7 @@ __global__ void softmax_dim_strided(float* __restrict__ out, const float* __rest
     for (int i = threadIdx.x; i < element_count; i += BLOCK)
         base_out[i * element_stride] *= inv_s;
 }
-void kernel_ops::softmax(void* out_data, const void* in_data, int element_stride, int element_count, int rows)
+void kernel_ops::softmax(void* out_data, const void* in_data, size_t element_stride, size_t element_count, size_t rows)
 {
     constexpr int BLOCK = DEFAULT_BLOCK_SIZE;
 
@@ -2340,7 +2341,7 @@ void kernel_ops::softmax(void* out_data, const void* in_data, int element_stride
     // If can use the fast kernel use it.
     if (element_stride == 1)
     {
-        CUDA_LAUNCH(softmax_lastdim<BLOCK>, rows, BLOCK,
+        CUDA_LAUNCH(softmax_lastdim<BLOCK>, (unsigned)rows, BLOCK,
             (float*)out_data,
             (const float*)in_data,
             element_count
@@ -2350,7 +2351,7 @@ void kernel_ops::softmax(void* out_data, const void* in_data, int element_stride
     // Else use the strided kernel.
     else
     {
-        CUDA_LAUNCH(softmax_dim_strided<BLOCK>, rows, BLOCK,
+        CUDA_LAUNCH(softmax_dim_strided<BLOCK>, (unsigned)rows, BLOCK,
             (float*)out_data,
             (const float*)in_data,
             element_stride,
@@ -2625,7 +2626,7 @@ void kernel_ops::argmin(void* out_data, const void* in_data, size_t num_cases, s
 */
 
 template<int TILE_DIM, int BLOCK_ROWS>
-__global__ void transpose_last2_kernel_vec(float* __restrict__ out, const float* __restrict__ in, int A, int B, int num_matrices)
+__global__ void transpose_last2_kernel_vec(float* __restrict__ out, const float* __restrict__ in, int A, int B, size_t num_matrices)
 {
     // Each matrix is A x B, contiguous.
     const int m = (int)blockIdx.z;
@@ -2688,7 +2689,7 @@ __global__ void transpose_last2_kernel_vec(float* __restrict__ out, const float*
 }
 template<int TILE_DIM, int BLOCK_ROWS>
 __global__ void transpose_kernel_vec(float* __restrict__ out, const float* __restrict__ in, int A, int B, 
-    int outer_size, int middle_size, int inner_size, int in_stride, int out_stride)
+    size_t outer_size, size_t middle_size, size_t inner_size, size_t in_stride, size_t out_stride)
 {
     // Flatten (outer,middle) into a single batch index.
     const int batch = (int)blockIdx.z;
@@ -2714,10 +2715,10 @@ __global__ void transpose_kernel_vec(float* __restrict__ out, const float* __res
     // Using float4 shared tile; +1 column padding to reduce bank conflicts.
     __shared__ float4 tile4[TILE_DIM][TILE_DIM + 1];
 
-    const int inner4 = inner_size / 4; // number of float4 packets
+    const size_t inner4 = inner_size / 4; // number of float4 packets
 
     // For each float4 packet along the inner tail:
-    for (int p4 = 0; p4 < inner4; p4++)
+    for (size_t p4 = 0; p4 < inner4; p4++)
     {
         // Load tile: coalesced reads
         #pragma unroll
@@ -2753,7 +2754,7 @@ __global__ void transpose_kernel_vec(float* __restrict__ out, const float* __res
 }
 template<int TILE_DIM, int BLOCK_ROWS>
 __global__ void transpose_kernel(float* __restrict__ out, const float* __restrict__ in, int A, int B, 
-    int outer_size, int middle_size, int inner_size, int in_stride, int out_stride)
+    size_t outer_size, size_t middle_size, size_t inner_size, size_t in_stride, size_t out_stride)
 {
     // Flatten (outer,middle) into a single batch index.
     const int batch = (int)blockIdx.z;
@@ -2808,7 +2809,7 @@ __global__ void transpose_kernel(float* __restrict__ out, const float* __restric
         __syncthreads();
     }
 }
-void kernel_ops::transpose(void* out_data, const void* in_data, int A, int B, int outter_size, int middle_size, int inner_size, int in_stride, int out_stride)
+void kernel_ops::transpose(void* out_data, const void* in_data, int A, int B, size_t outter_size, size_t middle_size, size_t inner_size, size_t in_stride, size_t out_stride)
 {
     constexpr int TILE_DIM = 32;
     constexpr int BLOCK_ROWS = 8;
@@ -3110,7 +3111,7 @@ __global__ void repeat_kernel(float* __restrict__ out, const float* __restrict__
     for (size_t i = in_idx, j = out_idx; i < in_end; i += BLOCK, j += BLOCK)
         out[j] = in[i];
 }
-void kernel_ops::repeat(void* out_data, const void* in_data, int outer_size, int inner_size, int repetitions)
+void kernel_ops::repeat(void* out_data, const void* in_data, size_t outer_size, size_t inner_size, int repetitions)
 {
     constexpr int BLOCK = DEFAULT_BLOCK_SIZE;
 
@@ -3413,10 +3414,10 @@ void kernel_ops::matmul(void* out_data, const void* A_data, const void* B_data, 
             int out = 0;
             CUBLAS_CHECK(cublasLtMatmulAlgoGetHeuristic(cublas::handle(), data.opDesc, 
                 data.bLayout, data.aLayout, data.cLayout, data.cLayout, cublas::preference(), 1, &heur, &out));
-            TENSOR_CHECK(out != 0, 
+            MACROGRAD_CHECK(out != 0, 
                 "No cuBLASLt heuristic algorithm found for this GEMM."
             );
-            TENSOR_CHECK(heur.state == CUBLAS_STATUS_SUCCESS,
+            MACROGRAD_CHECK(heur.state == CUBLAS_STATUS_SUCCESS,
                 "cuBLASLt heuristic returned an unusable algorithm."
             );
 
@@ -3651,10 +3652,10 @@ void kernel_ops::matmul_bias(void* out_data, const void* A_data, const void* B_d
             int out = 0;
             CUBLAS_CHECK(cublasLtMatmulAlgoGetHeuristic(cublas::handle(), data.opDesc,
                 data.bLayout, data.aLayout, data.cLayout, data.cLayout, cublas::preference(), 1, &heur, &out));
-            TENSOR_CHECK(out != 0, 
+            MACROGRAD_CHECK(out != 0,
                 "No cuBLASLt heuristic algorithm found for this GEMM."
             );
-            TENSOR_CHECK(heur.state == CUBLAS_STATUS_SUCCESS,
+            MACROGRAD_CHECK(heur.state == CUBLAS_STATUS_SUCCESS,
                 "cuBLASLt heuristic returned an unusable algorithm."
             );
 
@@ -3987,9 +3988,12 @@ struct RegularOpDescriptor
     bool arbitrary_can_vect = false;
     void* temp = nullptr;
 };
-static inline RegularOpDescriptor analize_op_case(const void* in1_data, const Shape& out_shape, const Shape& in_shape)
+static inline RegularOpDescriptor analize_op_case(const void* in1_data, Shape out, Shape in)
 {
     RegularOpDescriptor desc = {};
+
+    while (out.dim() > in.dim())
+        in.add(0, 1);
 
     bool same_shape = true;
     bool can_broadcast = true;
@@ -3997,10 +4001,10 @@ static inline RegularOpDescriptor analize_op_case(const void* in1_data, const Sh
     bool can_squeeze = true;
     bool squeezing = true;
 
-    for (unsigned dim = 0; dim < out_shape.dim(); dim++)
+    for (unsigned dim = 0; dim < out.dim(); dim++)
     {
-        int i = in_shape[dim]; desc.num_in *= i;
-        int o = out_shape[dim]; desc.num_out *= o;
+        int i = in[dim]; desc.num_in *= i;
+        int o = out[dim]; desc.num_out *= o;
 
         if (o > i)
         {
@@ -4032,9 +4036,6 @@ static inline RegularOpDescriptor analize_op_case(const void* in1_data, const Sh
     else
     {
         desc.type = RegularOpDescriptor::ARBITRARY;
-
-        Shape in = in_shape;
-        Shape out = out_shape;
 
         // First fuse shapes as much as possible.
         for (unsigned dim = 0; dim < in.dim() - 1;)

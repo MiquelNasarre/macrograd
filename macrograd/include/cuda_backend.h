@@ -74,11 +74,11 @@ namespace kernel_ops
 
 	// --- Row-Wise Operators ---
 
-	void sum(void* out_data, const void* in_data, int element_stride, int element_count, int rows);
-	void mean(void* out_data, const void* in_data, int element_stride, int element_count, int rows);
-	void var(void* out_data, const void* in_data, int element_stride, int element_count, int rows);
-	void std(void* out_data, const void* in_data, int element_stride, int element_count, int rows);
-	void softmax(void* out_data, const void* in_data, int element_stride, int element_count, int rows);
+	void     sum(void* out_data, const void* in_data, size_t element_stride, size_t element_count, size_t rows);
+	void    mean(void* out_data, const void* in_data, size_t element_stride, size_t element_count, size_t rows);
+	void     var(void* out_data, const void* in_data, size_t element_stride, size_t element_count, size_t rows);
+	void     std(void* out_data, const void* in_data, size_t element_stride, size_t element_count, size_t rows);
+	void softmax(void* out_data, const void* in_data, size_t element_stride, size_t element_count, size_t rows);
 
 	void max(void* out_data, void* hot_data, const void* in_data, size_t rows, size_t element_count, size_t stride);
 	void min(void* out_data, void* hot_data, const void* in_data, size_t rows, size_t element_count, size_t stride);
@@ -87,10 +87,10 @@ namespace kernel_ops
 
 	// --- Shape modifiers ---
 
-	void transpose(void* out_data, const void* in_data, int A, int B, int outter_size, int middle_size, int inner_size, int in_stride, int out_stride);
+	void transpose(void* out_data, const void* in_data, int A, int B, size_t outter_size, size_t middle_size, size_t inner_size, size_t in_stride, size_t out_stride);
 	void subset(const Shape& out_shape, const Shape& in_shape, const Shape& idxs, void* out_data, const void* in_data);
 	void modify(const Shape& out_shape, const Shape& in_shape, const Shape& out_strides, const Shape& idxs, void* out_data, const void* in_data);
-	void repeat(void* out_data, const void* in_data, int outer_size, int inner_size, int repetitions);
+	void repeat(void* out_data, const void* in_data, size_t outer_size, size_t inner_size, int repetitions);
 
 	// --- Functional Namespace ---
 
@@ -125,6 +125,4 @@ namespace kernel_ops
 	void  meq_than(void* out_data, const void* in0_data, const void* in1_data, size_t numel0, size_t numel1);
 	void   eq_than(void* out_data, const void* in0_data, const void* in1_data, size_t numel0, size_t numel1);
 	void  neq_than(void* out_data, const void* in0_data, const void* in1_data, size_t numel0, size_t numel1);
-
-
 }

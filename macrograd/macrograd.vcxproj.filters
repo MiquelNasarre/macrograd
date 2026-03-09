@@ -35,7 +35,7 @@
     <ClCompile Include="source\tensor_ops.cpp">
       <Filter>Source\Private</Filter>
     </ClCompile>
-    <ClCompile Include="nn.cpp">
+    <ClCompile Include="source\nn.cpp">
       <Filter>Source\Private</Filter>
     </ClCompile>
   </ItemGroup>

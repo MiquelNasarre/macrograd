@@ -5,10 +5,6 @@
 #include <math.h>
 #include <limits>
 
-// Macro to help with data acess on CPU.
-#define __data				((float*)_internals->_data)
-#define __dataof(tensor)	((float*)(tensor)._internals->_data)
-
 /*
 --------------------------------------------------------------------------------------------------------------------------
  Internal Operators.
@@ -18,7 +14,7 @@
 Tensor& Tensor::internal_gradient()
 {
 	// Sanity checks.
-	TENSOR_CHECK(has_grad(),
+	MACROGRAD_CHECK(has_grad(),
 		"Trying to get the gradient on an tensor with no gradient is not allowed."
 	);
 
@@ -62,16 +58,16 @@ Tensor Tensor::internal_copy(bool with_grad, bool copy_grad) const
 
 Tensor Tensor::operator[](const VectorInt& idxs) const
 {
-	TENSOR_CHECK(idxs.len(),
+	MACROGRAD_CHECK(idxs.len(),
 		"Trying to use Tensor::operator[] with empty indices is not allowed."
 	);
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to use operator[] on an empty tensor is not allowed."
 	);
-	TENSOR_CHECK(idxs.is_gpu() == is_gpu(),
+	MACROGRAD_CHECK(idxs.is_gpu() == is_gpu(),
 		"Trying to call operator[] with indices and tensor in different devices."
 	);
-	TENSOR_CHECK(!has_grad(),
+	MACROGRAD_CHECK(!has_grad(),
 		"Tensor::operator[] being called from a tensor that has gradient.\n"
 		"Backpropagation is not implemented for this operator, consider using subset() instead.\n"
 		"If you still want to use [] please call no_grad() right before to avoid this message."
@@ -89,8 +85,8 @@ Tensor Tensor::operator[](const VectorInt& idxs) const
 	unsigned length = idxs.len();
 	unsigned size0 = _view[0];
 	unsigned stride = _stride[0];
-	float* out_data = __dataof(out);
-	float* ten_data = __data;
+	float* out_data = out.internal_data();
+	const float* ten_data = internal_data();
 
 	// Now let's indexate this tensor.
 	if (out.is_gpu())
@@ -101,7 +97,7 @@ Tensor Tensor::operator[](const VectorInt& idxs) const
 		for (unsigned i = 0; i < length; i++)
 		{
 			int idx = idxs_data[i];
-			TENSOR_CHECK(idx >= 0 && (unsigned)idx < size0,
+			MACROGRAD_CHECK(idx >= 0 && (unsigned)idx < size0,
 				"Idx out of bounds find during an operator [] call.\n"
 				"Make sure your indices are in the range [0, size(0) - 1]. Idx found: %i", idx
 			);
@@ -114,14 +110,14 @@ Tensor Tensor::operator[](const VectorInt& idxs) const
 
 void Tensor::internal_add(const float* val, bool gpu, float factor)
 {
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to internally add to an empty tensor."
 	);
-	TENSOR_CHECK(!gpu || is_gpu(),
+	MACROGRAD_CHECK(!gpu || is_gpu(),
 		"Trying to internally add a float stored in CUDA to a CPU tensor."
 	);
 
-	float* data = __data;
+	float* data = internal_data();
 	const unsigned numel = this->numel();
 
 	if (is_gpu())
@@ -137,14 +133,14 @@ void Tensor::internal_add(const float* val, bool gpu, float factor)
 
 void Tensor::internal_multiply(const float* val, bool gpu, float factor)
 {
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to internally multiply to an empty tensor."
 	);
-	TENSOR_CHECK(!gpu || is_gpu(),
+	MACROGRAD_CHECK(!gpu || is_gpu(),
 		"Trying to internally multiply a float stored in CUDA to a CPU tensor."
 	);
 
-	float* data = __data;
+	float* data = internal_data();
 	const unsigned numel = this->numel();
 
 	if (is_gpu())
@@ -160,14 +156,14 @@ void Tensor::internal_multiply(const float* val, bool gpu, float factor)
 
 void Tensor::internal_set(const float* val, bool gpu, float factor)
 {
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to internally set an empty tensor."
 	);
-	TENSOR_CHECK(!gpu || is_gpu(),
+	MACROGRAD_CHECK(!gpu || is_gpu(),
 		"Trying to internally set a float stored in CUDA to a CPU tensor."
 	);
 
-	float* data = __data;
+	float* data = internal_data();
 	const unsigned numel = this->numel();
 
 	if (is_gpu())
@@ -183,21 +179,21 @@ void Tensor::internal_set(const float* val, bool gpu, float factor)
 
 void Tensor::internal_add(const Tensor& other)
 {
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to internally add to an empty tensor."
 	);
-	TENSOR_CHECK(other.is_init(),
+	MACROGRAD_CHECK(other.is_init(),
 		"Trying to internally add an empty tensor."
 	);
-	TENSOR_CHECK(this->numel() == other.numel(),
+	MACROGRAD_CHECK(this->numel() == other.numel(),
 		"Trying to internally add a tensor with a different number of elements."
 	);
-	TENSOR_CHECK(is_gpu() == other.is_gpu(),
+	MACROGRAD_CHECK(is_gpu() == other.is_gpu(),
 		"Trying to internally add two tensors on different devices."
 	);
 
-	float* data = __data;
-	float* other_data = __dataof(other);
+	float* data = internal_data();
+	const float* other_data = other.internal_data();
 	const int numel = this->numel();
 
 	if (is_gpu())
@@ -214,21 +210,21 @@ void Tensor::internal_add(const Tensor& other)
 
 void Tensor::internal_add_prod(float val, const Tensor& other)
 {
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to internally add to an empty tensor."
 	);
-	TENSOR_CHECK(other.is_init(),
+	MACROGRAD_CHECK(other.is_init(),
 		"Trying to internally add an empty tensor."
 	);
-	TENSOR_CHECK(this->numel() == other.numel(),
+	MACROGRAD_CHECK(this->numel() == other.numel(),
 		"Trying to internally add a tensor with a different number of elements."
 	);
-	TENSOR_CHECK(is_gpu() == other.is_gpu(),
+	MACROGRAD_CHECK(is_gpu() == other.is_gpu(),
 		"Trying to internally add two tensors on different devices."
 	);
 
-	float* data = __data;
-	float* other_data = __dataof(other);
+	float* data = internal_data();
+	const float* other_data = other.internal_data();
 	const int numel = this->numel();
 
 	if (is_gpu())
@@ -243,21 +239,21 @@ void Tensor::internal_add_prod(float val, const Tensor& other)
 
 void Tensor::internal_subtract(const Tensor& other)
 {
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to internally subtract to an empty tensor."
 	);
-	TENSOR_CHECK(other.is_init(),
+	MACROGRAD_CHECK(other.is_init(),
 		"Trying to internally subtract an empty tensor."
 	);
-	TENSOR_CHECK(this->numel() == other.numel(),
+	MACROGRAD_CHECK(this->numel() == other.numel(),
 		"Trying to internally subtract a tensor with a different number of elements."
 	);
-	TENSOR_CHECK(is_gpu() == other.is_gpu(),
+	MACROGRAD_CHECK(is_gpu() == other.is_gpu(),
 		"Trying to internally subtract two tensors on different devices."
 	);
 
-	float* data = __data;
-	float* other_data = __dataof(other);
+	float* data = internal_data();
+	const float* other_data = other.internal_data();
 	const int numel = this->numel();
 
 	if (is_gpu())
@@ -272,21 +268,21 @@ void Tensor::internal_subtract(const Tensor& other)
 
 void Tensor::internal_multiply(const Tensor& other)
 {
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to internally multiply an empty tensor."
 	);
-	TENSOR_CHECK(other.is_init(),
+	MACROGRAD_CHECK(other.is_init(),
 		"Trying to internally multiply by an empty tensor."
 	);
-	TENSOR_CHECK(this->numel() == other.numel(),
+	MACROGRAD_CHECK(this->numel() == other.numel(),
 		"Trying to internally multiply a tensor with a different number of elements."
 	);
-	TENSOR_CHECK(is_gpu() == other.is_gpu(),
+	MACROGRAD_CHECK(is_gpu() == other.is_gpu(),
 		"Trying to internally multiply two tensors on different devices."
 	);
 
-	float* data = __data;
-	float* other_data = __dataof(other);
+	float* data = internal_data();
+	const float* other_data = other.internal_data();
 	const int numel = this->numel();
 
 	if (is_gpu())
@@ -301,15 +297,15 @@ void Tensor::internal_multiply(const Tensor& other)
 
 void Tensor::internal_set_value(const Shape& route, float value)
 {
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to set a value on an empty tensor."
 	);
-	TENSOR_CHECK(numel(),
+	MACROGRAD_CHECK(numel(),
 		"Trying to set a value on a tensor with no values.\n"
 		"The tensor shape is %s", _view.str()
 	);
 
-	float* ptr = __data;
+	float* ptr = internal_data();
 	for (unsigned d = 0; d < dim(); d++)
 		ptr += ((route[d] + _view[d] * (2 - route[d] / _view[d])) % _view[d]) * _stride[d];
 
@@ -322,40 +318,37 @@ void Tensor::internal_set_value(const Shape& route, float value)
 
 float Tensor::internal_get_value(const Shape& route) const
 {
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to get a value on an empty array."
 	);
-	TENSOR_CHECK(numel(),
+	MACROGRAD_CHECK(numel(),
 		"Trying to get a value on an array with no values.\n"
 		"The array shape is %s", _view.str()
 	);
 
+	// Get data pointer.
+	const float* ptr = internal_data();
+
+	// Compute pointer rout.
+	for (unsigned d = 0; d < dim(); d++)
+		ptr += ((route[d] + _view[d] * (2 - route[d] / _view[d])) % _view[d]) * _stride[d];
+
 	if (is_gpu())
 	{
-		float* ptr = __data;
-		for (unsigned d = 0; d < dim(); d++)
-			ptr += ((route[d] + _view[d] * (2 - route[d] / _view[d])) % _view[d]) * _stride[d];
-
 		float val;
 		cuda::copy_gpu_to_cpu(&val, ptr, sizeof(float));
 		return val;
 	}
 	else
-	{
-		float* ptr = __data;
-		for (unsigned d = 0; d < dim(); d++)
-			ptr += ((route[d] + _view[d] * (2 - route[d] / _view[d])) % _view[d]) * _stride[d];
-
 		return *ptr;
-	}
 }
 
 void Tensor::internal_set_vector(const Shape& route, const float* values)
 {
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to set a vector on an empty tensor."
 	);
-	TENSOR_CHECK(numel(),
+	MACROGRAD_CHECK(numel(),
 		"Trying to set a vector on a tensor with no values.\n"
 		"The tensor shape is %s", _view.str()
 	);
@@ -371,23 +364,20 @@ void Tensor::internal_set_vector(const Shape& route, const float* values)
 		_data_size *= _view[i];
 
 	if (is_gpu())
-		cuda::copy_cpu_to_gpu(__data + idx, values, _data_size);
+		cuda::copy_cpu_to_gpu(internal_data() + idx, values, _data_size);
 
 	else
-		memcpy(__data + idx, values, _data_size);
+		memcpy(internal_data() + idx, values, _data_size);
 }
 
 float* Tensor::internal_get_vector(const Shape& route)
 {
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to get a vector of an empty tensor."
 	);
-	TENSOR_CHECK(numel(),
+	MACROGRAD_CHECK(numel(),
 		"Trying to get a vector of a tensor with no values.\n"
 		"The tensor shape is %s", _view.str()
-	);
-	TENSOR_CHECK(!is_gpu(),
-		"Trying to get a vector on a GPU tensor is not allowed.\n"
 	);
 
 	// Get idx given route. Modulo for negative numbers.
@@ -396,7 +386,7 @@ float* Tensor::internal_get_vector(const Shape& route)
 		idx += ((route[i] + _view[i] * (2 - route[i] / _view[i])) % _view[i]) * _stride[i];
 
 	// Return data ptr.
-	return __data + idx;
+	return internal_data() + idx;
 }
 
 /*
@@ -432,10 +422,10 @@ Tensor& Tensor::operator=(const Tensor& other)
 
 Tensor Tensor::view(const Shape& shape) const
 {
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to call view on an empty tensor."
 	);
-	TENSOR_CHECK(shape.dim(),
+	MACROGRAD_CHECK(shape.dim(),
 		"Trying to change the view of a tensor with an empty shape."
 	);
 
@@ -448,7 +438,7 @@ Tensor Tensor::view(const Shape& shape) const
 	{
 		if (new_shape[i] == -1)
 		{
-			TENSOR_CHECK(neg_one == -1,
+			MACROGRAD_CHECK(neg_one == -1,
 				"Ambiguous shape found inside a view call.\n"
 				"Make sure you only have one unknown dimension marked as -1 to avoid ambiguity.\n"
 				"Old Shape: %s | View Input Shape: %s.", _view.str(), shape.str()
@@ -459,19 +449,21 @@ Tensor Tensor::view(const Shape& shape) const
 	}
 	if (neg_one != -1)
 	{
-		TENSOR_CHECK(new_total_dim != 0,
+		MACROGRAD_CHECK(new_total_dim != 0,
 			"Ambiguous shape find inside a view call.\n"
 			"It is not allowed to have an unknown dimension -1 while there is a size 0.\n"
 			"Old Shape: %s | View Input Shape: %s.", _view.str(), shape.str()
 		);
-		TENSOR_CHECK(numel() % new_total_dim == 0,
+		MACROGRAD_CHECK(numel() % new_total_dim == 0,
 			"Unreconcileable shapes found inside a view call, total sizes are not divisible.\n"
 			"Old Shape: %s | View Input Shape: %s.", _view.str(), shape.str()
 		);
 		new_shape[neg_one] = numel() / new_total_dim;
 	}
 	else if (new_total_dim != numel())
-		TENSOR_ERROR("Incompatible shapes found during a view call. Make sure the total dimensionality matches.\n"
+		
+		
+		("Incompatible shapes found during a view call. Make sure the total dimensionality matches.\n"
 			"Old Shape: %s | View Input Shape: %s.", _view.str(), shape.str()
 		);
 
@@ -494,7 +486,8 @@ Tensor Tensor::view(const Shape& shape) const
 Tensor Tensor::flatten() const
 {
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	
+	(is_init(),
 		"Trying to flatten an empty tensor."
 	);
 	
@@ -511,13 +504,13 @@ Tensor Tensor::flatten() const
 
 Tensor Tensor::squeeze(int dim) const
 {
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to call squeeze on an empty tensor."
 	);
-	TENSOR_CHECK(_view.dim() > 1,
+	MACROGRAD_CHECK(_view.dim() > 1,
 		"Trying to squeeze a tensor with only one dimension left is not allowed."
 	);
-	TENSOR_CHECK(_view[dim] == 1,
+	MACROGRAD_CHECK(_view[dim] == 1,
 		"Trying to squeeze a non unitary dimension on a tensor.\n"
 		"Please make sure you call squeeze on dimensions of size 1."
 	);
@@ -533,7 +526,7 @@ Tensor Tensor::squeeze(int dim) const
 
 Tensor Tensor::unsqueeze(int dim) const
 {
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to call unsqueeze on an empty tensor."
 	);
 
@@ -582,7 +575,7 @@ Tensor Tensor::transpose(int dim0, int dim1) const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to transpose an empty tensor."
 	);
 
@@ -611,8 +604,8 @@ Tensor Tensor::transpose(int dim0, int dim1) const
 	Tensor out(out_shape, device(), has_grad());
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten_data = __data;
+	float* out_data = out.internal_data();
+	const float* ten_data = internal_data();
 	// Store the length of the dimensions.
 	const unsigned A = _view[dim0];
 	const unsigned B = _view[dim1];
@@ -693,7 +686,7 @@ Tensor Tensor::subset(const Shape& shape, const Shape& start_indices) const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to subset an empty tensor."
 	);
 
@@ -719,25 +712,25 @@ Tensor Tensor::subset(const Shape& shape, const Shape& start_indices) const
 		new_shape.add(-1, _view[new_shape.dim()]);
 
 	// Sanity checks.
-	TENSOR_CHECK(new_shape.dim() == dim(),
+	MACROGRAD_CHECK(new_shape.dim() == dim(),
 		"Trying to call subset with a shape of different dimensionality.\n"
 		"Make sure you don't introduce a shape larger than the original.\n"
 		"Tensor Shape: %s | Subset Shape: %s", _view.str(), shape.str()
 	);
-	TENSOR_CHECK(start.dim() == dim(),
+	MACROGRAD_CHECK(start.dim() == dim(),
 		"Trying to call subset with a start_indices shape of different dimensionality.\n"
 		"Make sure you don't introduce an indices shape larger than the original.\n"
 		"Tensor Shape: %s | Start Indices: %s", _view.str(), start_indices.str()
 	);
 	for (unsigned i = 0; i < dim(); i++)
-		TENSOR_CHECK(new_shape[i] >= 0,
+		MACROGRAD_CHECK(new_shape[i] >= 0,
 			"Negative dimensions in a subset shape call.\n"
 			"Please make sure all dimensions are positive or -1 (full size) to avoid ambiguity.\n"
 			"Tensor Shape: %s | Subset Shape: %s", _view.str(), shape.str()
 		);
 
 	for (unsigned i = 0; i < dim(); i++)
-		TENSOR_CHECK(new_shape[i] + start[i] <= _view[i],
+		MACROGRAD_CHECK(new_shape[i] + start[i] <= _view[i],
 			"Out of bounds dimension for a subset call.\n"
 			"Start indices are not compatible with subset and input shape.\n"
 			"Tensor Shape: %s | Processed Subset Shape: %s | Processed Start Indices: %s", _view.str(), new_shape.str(), start.str()
@@ -751,8 +744,8 @@ Tensor Tensor::subset(const Shape& shape, const Shape& start_indices) const
 	Tensor out(new_shape, device(), has_grad());
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten_data = __data;
+	float* out_data = out.internal_data();
+	const float* ten_data = internal_data();
 
 	// Now we actually subset the tensor.
 	if (out.is_gpu())
@@ -846,14 +839,14 @@ Tensor Tensor::modify(const Tensor& other, const Shape& start_indices) const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to modify an empty tensor."
 	);
-	TENSOR_CHECK(other.is_init(),
+	MACROGRAD_CHECK(other.is_init(),
 		"Trying to modify with an empty other tensor."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(is_gpu() == other.is_gpu(),
+	MACROGRAD_CHECK(is_gpu() == other.is_gpu(),
 		"Trying to add madify a tensor with another tensor on a different device."
 	);
 
@@ -879,18 +872,18 @@ Tensor Tensor::modify(const Tensor& other, const Shape& start_indices) const
 		stride.add(0, stride[0]);
 	}
 
-	TENSOR_CHECK(shape.dim() == dim(),
+	MACROGRAD_CHECK(shape.dim() == dim(),
 		"Trying to call modify with modification tensor of different dimensionality.\n"
 		"Make sure the number of dimensions is equal or smaller to the original tensor.\n"
 		"Tensor Shape: %s | Modifier Shape: %s", _view.str(), other._view.str()
 	);
-	TENSOR_CHECK(start.dim() == dim(),
+	MACROGRAD_CHECK(start.dim() == dim(),
 		"Trying to call subset with a start_indices shape of different dimensionality.\n"
 		"Make sure the number of idx dimensions is equal or smaller to the original tensor.\n"
 		"Tensor Shape: %s | Start Indices: %s", _view.str(), start_indices.str()
 	);
 	for (unsigned i = 0; i < dim(); i++)
-		TENSOR_CHECK(shape[i] + start[i] <= _view[i],
+		MACROGRAD_CHECK(shape[i] + start[i] <= _view[i],
 			"Out of bounds dimension for a modify call.\n"
 			"Start indices are not compatible with modifier and input shape.\n"
 			"Tensor Shape: %s | Processed Modifier Shape: %s | Processed Start Indices: %s", _view.str(), shape.str(), start.str()
@@ -907,8 +900,8 @@ Tensor Tensor::modify(const Tensor& other, const Shape& start_indices) const
 	Tensor out = internal_copy(requires_grad, false);
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* mod_data = __dataof(other);
+	float* out_data = out.internal_data();
+	const float* mod_data = other.internal_data();
 
 	// Discard unitary dimensions and move out pointer forward.
 	while (shape[0] == 1 && shape.dim() > 1)
@@ -1009,11 +1002,11 @@ Tensor Tensor::repeat(int dim, unsigned repetitions) const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to add repetitions to an empty tensor."
 	);
 	// Repeated shape must be unitary.
-	TENSOR_CHECK(_view[dim] == 1,
+	MACROGRAD_CHECK(_view[dim] == 1,
 		"Trying to repeat a tensor on a non-unitary dimension.\n"
 		"Make sure the dimension you are repeating is of size 1."
 	);
@@ -1031,8 +1024,8 @@ Tensor Tensor::repeat(int dim, unsigned repetitions) const
 	Tensor out(out_shape, device(), has_grad());
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten_data = __data;
+	float* out_data = out.internal_data();
+	const float* ten_data = internal_data();
 	// Get relevant sizes.
 	unsigned outer_size = numel() / _stride[dim];
 	unsigned inner_size = _stride[dim];
@@ -1076,7 +1069,7 @@ Tensor Tensor::repeat(int dim, unsigned repetitions) const
 Tensor Tensor::sign() const
 {
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to get the sign of an empty tensor."
 	);
 
@@ -1084,8 +1077,8 @@ Tensor Tensor::sign() const
 	Tensor out(shape(), device(), false);
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten_data = __data;
+	float* out_data = out.internal_data();
+	const float* ten_data = internal_data();
 
 	// Get the element count.
 	unsigned _numel = out.numel();
@@ -1125,26 +1118,26 @@ Tensor Tensor::exp() const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to exponentiate an empty tensor."
 	);
 
 	// Create output with the same shape as tensor.
 	Tensor out(shape(), device(), has_grad());
 
+	// Extract the data.
+	float* out_data = out.internal_data();
+	const float* ten_data = internal_data();
+
+	// Get the element count.
+	unsigned _numel = out.numel();
+
 	// Now we actually exponentiate the tensor.
 	if (out.is_gpu())
-		kernel_ops::exp(__dataof(out), __data, out.numel());
-	else
-	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten_data = __data;
-		// Iterate through all elements.
-		int idx = -1, _numel = int(numel());
-		while (++idx < _numel)
-			out_data[idx] = expf(ten_data[idx]);
-	}
+		kernel_ops::exp(out_data, ten_data, out.numel());
+
+	else for (unsigned idx = 0; idx < _numel; idx++)
+		out_data[idx] = expf(ten_data[idx]);
 
 	// If it was a gradient operation store a ExpOp instance.
 	if (has_grad())
@@ -1178,26 +1171,26 @@ Tensor Tensor::log() const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to log an empty tensor."
 	);
 
 	// Create output with the same shape as tensor.
 	Tensor out(shape(), device(), has_grad());
 
+	// Extract the data.
+	float* out_data = out.internal_data();
+	const float* ten_data = internal_data();
+
+	// Get the element count.
+	unsigned _numel = out.numel();
+
 	// Now we actually log the tensors.
 	if (out.is_gpu())
-		kernel_ops::log(__dataof(out), __data, out.numel());
-	else
-	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten_data = __data;
-		// Iterate through all elements.
-		int idx = -1, _numel = int(numel());
-		while (++idx < _numel)
-			out_data[idx] = logf(ten_data[idx]);
-	}
+		kernel_ops::log(out_data, ten_data, out.numel());
+
+	else for (unsigned idx = 0; idx < _numel; idx++)
+		out_data[idx] = logf(ten_data[idx]);
 
 	// If it was a gradient operation store a LogOp instance.
 	if (has_grad())
@@ -1231,26 +1224,26 @@ Tensor Tensor::relu() const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to apply ReLU to an empty tensor."
 	);
 
 	// Create output with the same shape as tensor.
 	Tensor out(shape(), device(), has_grad());
 
+	// Extract the data.
+	float* out_data = out.internal_data();
+	const float* ten_data = internal_data();
+
+	// Get the element count.
+	unsigned _numel = out.numel();
+
 	// Now we actually ReLU the tensors.
 	if (out.is_gpu())
-		kernel_ops::relu(__dataof(out), __data, out.numel());
-	else
-	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten_data = __data;
-		// Iterate through all elements.
-		int idx = -1, _numel = int(numel());
-		while (++idx < _numel)
+		kernel_ops::relu(out_data, ten_data, out.numel());
+
+	else for (unsigned idx = 0; idx < _numel; idx++)
 			out_data[idx] = (ten_data[idx] > 0.f) ? ten_data[idx] : 0.f;
-	}
 
 	// If it was a gradient operation store a ReLUOp instance.
 	if (has_grad())
@@ -1284,26 +1277,26 @@ Tensor Tensor::silu() const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to apply SiLU to an empty tensor."
 	);
 
 	// Create output with the same shape as tensor.
 	Tensor out(shape(), device(), has_grad());
 
+	// Extract the data.
+	float* out_data = out.internal_data();
+	const float* ten_data = internal_data();
+
+	// Get the element count.
+	unsigned _numel = out.numel();
+
 	// Now we actually SiLU the tensors.
 	if (out.is_gpu())
-		kernel_ops::silu(__dataof(out), __data, out.numel());
-	else
-	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten_data = __data;
-		// Iterate through all elements.
-		int idx = -1, _numel = int(numel());
-		while (++idx < _numel)
+		kernel_ops::silu(out_data, ten_data, out.numel());
+
+	else for (unsigned idx = 0; idx < _numel; idx++)
 			out_data[idx] = ten_data[idx] / (1.f + expf(-ten_data[idx]));
-	}
 
 	// If it was a gradient operation store a SiLUOp instance.
 	if (has_grad())
@@ -1339,7 +1332,7 @@ Tensor Tensor::gelu() const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to apply GELU to an empty tensor."
 	);
 
@@ -1349,24 +1342,24 @@ Tensor Tensor::gelu() const
 	// Create output with the same shape as tensor.
 	Tensor out(shape(), device(), has_grad());
 
+	// Extract the data.
+	float* out_data = out.internal_data();
+	float* Phi_data = Phi.internal_data();
+	const float* ten_data = internal_data();
+
+	// Get the element count.
+	unsigned _numel = out.numel();
+
 	// Now we actually GELU the tensor.
 	if (out.is_gpu())
-		kernel_ops::gelu(__dataof(out), __data, out.numel());
-	else
+		kernel_ops::gelu(out_data, ten_data, out.numel());
+
+	else for (unsigned idx = 0; idx < _numel; idx++)
 	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* Phi_data = __dataof(Phi);
-		float* ten_data = __data;
-		// Iterate through all elements.
-		int idx = -1, _numel = int(numel());
-		while (++idx < _numel)
-		{
-			const float x = ten_data[idx];
-			constexpr float sq2 = 1.4142135624f;
-			Phi_data[idx] = 0.5f * (1.f + erff(x / sq2));
-			out_data[idx] = x * Phi_data[idx];
-		}
+		const float x = ten_data[idx];
+		constexpr float sq2 = 1.4142135624f;
+		Phi_data[idx] = 0.5f * (1.f + erff(x / sq2));
+		out_data[idx] = x * Phi_data[idx];
 	}
 
 	// If it was a gradient operation store a GELUOp instance.
@@ -1401,26 +1394,26 @@ Tensor Tensor::sigmoid() const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to apply sigmoid to an empty tensor."
 	);
 
 	// Create output with the same shape as tensor.
 	Tensor out(shape(), device(), has_grad());
 
+	// Extract the data.
+	float* out_data = out.internal_data();
+	const float* ten_data = internal_data();
+
+	// Get the element count.
+	unsigned _numel = out.numel();
+
 	// Now we actually sigmoid the tensor.
 	if (out.is_gpu())
-		kernel_ops::sigmoid(__dataof(out), __data, out.numel());
-	else
-	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten_data = __data;
-		// Iterate through all elements.
-		int idx = -1, _numel = int(numel());
-		while (++idx < _numel)
-			out_data[idx] = 1.f / (1.f + expf(-ten_data[idx]));
-	}
+		kernel_ops::sigmoid(out_data, ten_data, out.numel());
+
+	else for (unsigned idx = 0; idx < _numel; idx++)
+		out_data[idx] = 1.f / (1.f + expf(-ten_data[idx]));
 
 	// If it was a gradient operation store a SigOp instance.
 	if (has_grad())
@@ -1454,28 +1447,28 @@ Tensor Tensor::tanh() const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to apply tanh to an empty tensor."
 	);
 
 	// Create output with the same shape as tensor.
 	Tensor out(shape(), device(), has_grad());
 
+	// Extract the data.
+	float* out_data = out.internal_data();
+	const float* ten_data = internal_data();
+
+	// Get the element count.
+	unsigned _numel = out.numel();
+
 	// Now we actually tanh the tensor.
 	if (out.is_gpu())
-		kernel_ops::tanh(__dataof(out), __data, out.numel());
-	else
+		kernel_ops::tanh(out_data, ten_data, out.numel());
+
+	else for (unsigned idx = 0; idx < _numel; idx++)
 	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten_data = __data;
-		// Iterate through all elements.
-		int idx = -1, _numel = int(numel());
-		while (++idx < _numel)
-		{
-			const float exp2 = expf(2 * ten_data[idx]);
-			out_data[idx] = (exp2 - 1.f) / (exp2 + 1.f);
-		}
+		const float exp2 = expf(2 * ten_data[idx]);
+		out_data[idx] = (exp2 - 1.f) / (exp2 + 1.f);
 	}
 
 	// If it was a gradient operation store a TanOp instance.
@@ -1510,26 +1503,26 @@ Tensor Tensor::sqrt() const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to get the square root of an empty tensor."
 	);
 
 	// Create output with the same shape as tensor.
 	Tensor out(shape(), device(), has_grad());
 
+	// Extract the data.
+	float* out_data = out.internal_data();
+	const float* ten_data = internal_data();
+
+	// Get the element count.
+	unsigned _numel = out.numel();
+
 	// Now we actually sqrt the tensor.
 	if (out.is_gpu())
-		kernel_ops::sqrt(__dataof(out), __data, out.numel());
-	else
-	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten_data = __data;
-		// Iterate through all elements.
-		int idx = -1, _numel = int(numel());
-		while (++idx < _numel)
-			out_data[idx] = sqrtf(ten_data[idx]);
-	}
+		kernel_ops::sqrt(out_data, ten_data, out.numel());
+
+	else for (unsigned idx = 0; idx < _numel; idx++)
+		out_data[idx] = sqrtf(ten_data[idx]);
 
 	// If it was a gradient operation store a SqrtOp instance.
 	if (has_grad())
@@ -1563,26 +1556,26 @@ Tensor Tensor::square() const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to square an empty tensor."
 	);
 
 	// Create output with the same shape as tensor.
 	Tensor out(shape(), device(), has_grad());
 
+	// Extract the data.
+	float* out_data = out.internal_data();
+	const float* ten_data = internal_data();
+
+	// Get the element count.
+	unsigned _numel = out.numel();
+
 	// Now we actually square the tensor.
 	if (out.is_gpu())
-		kernel_ops::square(__dataof(out), __data, out.numel());
-	else
-	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten_data = __data;
-		// Iterate through all elements.
-		int idx = -1, _numel = int(numel());
-		while (++idx < _numel)
-			out_data[idx] = ten_data[idx] * ten_data[idx];
-	}
+		kernel_ops::square(out_data, ten_data, out.numel());
+
+	else for (unsigned idx = 0; idx < _numel; idx++)
+		out_data[idx] = ten_data[idx] * ten_data[idx];
 
 	// If it was a gradient operation store a SqOp instance.
 	if (has_grad())
@@ -1620,26 +1613,26 @@ Tensor Tensor::pow(float exp) const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to square an empty tensor."
 	);
 
 	// Create output with the same shape as tensor.
 	Tensor out(shape(), device(), has_grad());
 
+	// Extract the data.
+	float* out_data = out.internal_data();
+	const float* ten_data = internal_data();
+
+	// Get the element count.
+	unsigned _numel = out.numel();
+
 	// Now we actually power the tensor.
 	if (out.is_gpu())
-		kernel_ops::pow(__dataof(out), __data, exp, out.numel());
-	else
-	{
-		// Extract the data.
-		float* out_data = __dataof(out);
-		float* ten_data = __data;
-		// Iterate through all elements.
-		int idx = -1, _numel = int(numel());
-		while (++idx < _numel)
-			out_data[idx] = powf(ten_data[idx], exp);
-	}
+		kernel_ops::pow(out_data, ten_data, exp, out.numel());
+
+	else for (unsigned idx = 0; idx < _numel; idx++)
+		out_data[idx] = powf(ten_data[idx], exp);
 
 	// If it was a gradient operation store a PowOp instance.
 	if (has_grad())
@@ -1673,7 +1666,7 @@ Tensor Tensor::sum(int dim, bool keepdim) const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to apply sum to an empty tensor."
 	);
 
@@ -1690,8 +1683,8 @@ Tensor Tensor::sum(int dim, bool keepdim) const
 	Tensor out(out_shape, device(), has_grad());
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten_data = __data;
+	float* out_data = out.internal_data();
+	const float* ten_data = internal_data();
 	// Get relevant strides.
 	const unsigned elem_stride = _stride[dim];
 	const unsigned prev_stride = elem_stride * _size;
@@ -1755,7 +1748,7 @@ Tensor Tensor::mean(int dim, bool keepdim) const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to apply mean to an empty tensor."
 	);
 
@@ -1772,8 +1765,8 @@ Tensor Tensor::mean(int dim, bool keepdim) const
 	Tensor out(out_shape, device(), has_grad());
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten_data = __data;
+	float* out_data = out.internal_data();
+	const float* ten_data = internal_data();
 	// Get relevant strides.
 	const unsigned elem_stride = _stride[dim];
 	const unsigned prev_stride = elem_stride * _size;
@@ -1839,7 +1832,7 @@ Tensor Tensor::var(int dim, bool keepdim) const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to apply variance to an empty tensor."
 	);
 
@@ -1856,8 +1849,8 @@ Tensor Tensor::var(int dim, bool keepdim) const
 	Tensor out(out_shape, device(), has_grad());
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten_data = __data;
+	float* out_data = out.internal_data();
+	const float* ten_data = internal_data();
 	// Get relevant strides.
 	const unsigned elem_stride = _stride[dim];
 	const unsigned prev_stride = elem_stride * _size;
@@ -1927,7 +1920,7 @@ Tensor Tensor::std(int dim, bool keepdim) const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to apply standard deviation to an empty tensor."
 	);
 
@@ -1944,8 +1937,8 @@ Tensor Tensor::std(int dim, bool keepdim) const
 	Tensor out(out_shape, device(), has_grad());
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten_data = __data;
+	float* out_data = out.internal_data();
+	const float* ten_data = internal_data();
 	// Get relevant strides.
 	const unsigned elem_stride = _stride[dim];
 	const unsigned prev_stride = elem_stride * _size;
@@ -2016,7 +2009,7 @@ Tensor Tensor::softmax(int dim) const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to apply softmax to an empty tensor."
 	);
 
@@ -2029,8 +2022,8 @@ Tensor Tensor::softmax(int dim) const
 	Tensor out(shape(), device(), has_grad());
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten_data = __data;
+	float* out_data = out.internal_data();
+	const float* ten_data = internal_data();
 	// Get relevant strides.
 	const unsigned elem_stride = _stride[dim];
 	const unsigned prev_stride = elem_stride * _size;
@@ -2100,7 +2093,7 @@ Tensor Tensor::max(int dim, bool keepdim) const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to apply max to an empty tensor."
 	);
 
@@ -2122,9 +2115,9 @@ Tensor Tensor::max(int dim, bool keepdim) const
 		one_hot = Tensor(_view, device(), false);
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten_data = __data;
-	float* hot_data = has_grad() ? __dataof(one_hot) : nullptr;
+	float* out_data = out.internal_data();
+	const float* ten_data = internal_data();
+	float* hot_data = has_grad() ? one_hot.internal_data() : nullptr;
 
 	// Get relevant strides.
 	const unsigned elem_stride = _stride[dim];
@@ -2200,7 +2193,7 @@ Tensor Tensor::min(int dim, bool keepdim) const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to apply min to an empty tensor."
 	);
 
@@ -2222,9 +2215,9 @@ Tensor Tensor::min(int dim, bool keepdim) const
 		one_hot = Tensor(_view, device(), false);
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten_data = __data;
-	float* hot_data = has_grad() ? __dataof(one_hot) : nullptr;
+	float* out_data = out.internal_data();
+	const float* ten_data = internal_data();
+	float* hot_data = has_grad() ? one_hot.internal_data() : nullptr;
 
 	// Get relevant strides.
 	const unsigned elem_stride = _stride[dim];
@@ -2279,11 +2272,11 @@ Tensor Tensor::min(int dim, bool keepdim) const
 VectorInt Tensor::argmax(bool last_dim) const
 {
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to get argmax from an empty tensor."
 	);
 	// Tensor must have leq two dimensions.
-	TENSOR_CHECK(dim() <= 2,
+	MACROGRAD_CHECK(dim() <= 2,
 		"Argmax can only be called on two dimensional or single dimensional tensors.\n"
 		"Use view/squeeze/flatten to reshape your tensor accordingly."
 	);
@@ -2299,7 +2292,7 @@ VectorInt Tensor::argmax(bool last_dim) const
 
 	// Extract the data.
 	int* args_data = args.data();
-	float* ten_data = __data;
+	const float* ten_data = internal_data();
 
 	// Get relevant strides.
 	const unsigned elem_stride = last_dim ? 1 : cases;
@@ -2338,11 +2331,11 @@ VectorInt Tensor::argmax(bool last_dim) const
 VectorInt Tensor::argmin(bool last_dim) const
 {
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to get argmin from an empty tensor."
 	);
 	// Tensor must have leq two dimensions.
-	TENSOR_CHECK(dim() <= 2,
+	MACROGRAD_CHECK(dim() <= 2,
 		"Argmin can only be called on two dimensional or single dimensional tensors.\n"
 		"Use view/squeeze/flatten to reshape your tensor accordingly."
 	);
@@ -2358,7 +2351,7 @@ VectorInt Tensor::argmin(bool last_dim) const
 
 	// Extract the data.
 	int* args_data = args.data();
-	float* ten_data = __data;
+	const float* ten_data = internal_data();
 
 	// Get relevant strides.
 	const unsigned elem_stride = last_dim ? 1 : cases;
@@ -2413,6 +2406,8 @@ Tensor operator+(const Tensor& ten0, const Tensor& ten1)
 		AddOp(const Tensor& _sum0, const Tensor& _sum1, const Tensor& _out) : TensorOp{ "Addition", _out },
 			sum0{ _sum0.has_grad() ? _sum0 : Tensor() }, sum1{ _sum1.has_grad() ? _sum1 : Tensor() }
 		{
+			// Unsqueeze so that we can broacdast properly during backprop.
+			while (sum1.is_init() && out.dim() > sum1.dim()) sum1 = sum1.unsqueeze(0);
 			if (sum0.has_grad()) _relatives[0] = &sum0;
 			if (sum1.has_grad()) _relatives[1] = &sum1;
 		}
@@ -2429,28 +2424,28 @@ Tensor operator+(const Tensor& ten0, const Tensor& ten1)
 	// --- Sanity checks ---
 	
 	// Both tensor must be initialized.
-	TENSOR_CHECK(ten0.is_init(),
+	MACROGRAD_CHECK(ten0.is_init(),
 		"Trying to add two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(ten1.is_init(),
+	MACROGRAD_CHECK(ten1.is_init(),
 		"Trying to add two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(ten0.is_gpu() == ten1.is_gpu(),
+	MACROGRAD_CHECK(ten0.is_gpu() == ten1.is_gpu(),
 		"Trying to add two tensors in different devices is not allowed."
 	);
-	// Both tensor must have the same dimensionality to avoid ambiguity.
-	TENSOR_CHECK(ten0.dim() == ten1.dim(),
-		"Trying to add two tensors with different dimensions.\n"
-		"For broadcast addition please use view() or squeeze()/unsqueeze() to make dimensions match.\n"
+	// Ten0 must have more or equal the amount of dimensions of ten1 for broadcasting.
+	MACROGRAD_CHECK(ten0.dim() >= ten1.dim(),
+		"Trying to add two tensors with incompatible dimensions.\n"
+		"The dimensions of the tensors must match or the second tensor must broadcast to the first one.\n"
 		"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
 	);
 	// Both tensors must either have the same dimension sizes or one of them have size one.
-	// So that they can be broadcasted or summed without ambiguity.
-	for (unsigned i = 0; i < ten0.dim(); i++)
-		TENSOR_CHECK(ten0.size(i) == 1 || ten1.size(i) == 1 || ten0.size(i) == ten1.size(i),
-			"Trying to add two tensors with incompatible shapes.\n"
-			"Make sure shapes are compatible, meaning they have the same sizes or one of them is unitary for broadcasting.\n"
+	unsigned offset = ten0.dim() - ten1.dim();
+	for (unsigned i = offset; i < ten0.dim(); i++)
+		MACROGRAD_CHECK(ten0._view[i] == ten1._view[i - offset] || ten1._view[i - offset] == 1 || ten0._view[i] == 1,
+			"Trying to add two tensors with incompatible shapes for broadcasting.\n"
+			"Make sure shapes are compatible, meaning they have the same sizes or one of them is unitary.\n"
 			"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
 		);
 
@@ -2461,75 +2456,68 @@ Tensor operator+(const Tensor& ten0, const Tensor& ten1)
 	Tensor out(ten0.shape(), ten0.device(), requires_grad);
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten0_data = __dataof(ten0);
-	float* ten1_data = __dataof(ten1);
+	float* out_data = out.internal_data();
+	const float* ten0_data = ten0.internal_data();
+	const float* ten1_data = ten1.internal_data();
 
-	// Now we actually sum the tensors.
+	// Now we actually add the tensors.
 	if (out.is_gpu())
 		kernel_ops::shaped_add(out_data, ten0_data, ten1_data, out._view, ten1._view);
 	else
 	{
-		// Sum dimensions on ten1 if necessary.
-		Tensor ten1_summed = ten1.no_grad();
+		// Unsqueeze and sum dimensions on ten1 if necessary.
+		Tensor t1 = ten1.no_grad();
+		while (ten0.dim() > t1.dim()) t1 = t1.unsqueeze(0);
 		for (unsigned i = 0; i < ten0.dim(); i++)
-			if (ten0.size(i) == 1 && ten1_summed.size(i) != 1)
-				ten1_summed = ten1_summed.sum(i, true);
+			if (ten0._view[i] == 1 && t1._view[i] != 1)
+				t1 = t1.sum(i, true);
 
-		float* ten1_summed_data = __dataof(ten1_summed);
+		// Extract data.
+		const float* t1_data = t1.internal_data();
 
 		// Exptract the shapes.
-		Shape out_shape = out.shape();
-		Shape ten0_shape = ten0.shape();
-		Shape ten1_shape = ten1_summed.shape();
+		Shape t0_shape = ten0._view;
+		Shape t1_shape = t1._view;
 		// Find the last non-unitary dimension to iterate through.
 		unsigned last_long_dim = 0;
-		for (unsigned i = 0; i < out_shape.dim(); i++)
-			if (out_shape[i] > 1)
+		for (unsigned i = 0; i < t0_shape.dim(); i++)
+			if (t0_shape[i] > 1)
 				last_long_dim = i;
-		// Find the stride, will be 1 except for ten1 if broadcasting.
-		const unsigned dout = (out._view[last_long_dim] != 1) ? 1 : 0;
-		const unsigned dten0 = (ten0._view[last_long_dim] != 1) ? 1 : 0;
-		const unsigned dten1 = (ten1_summed._view[last_long_dim] != 1) ? 1 : 0;
+		// Find the stride, will be 0 if broadcasting on last dim.
+		const unsigned dt1 = (t1._view[last_long_dim] != 1) ? 1 : 0;
 		// Find the vector length to iterate.
-		const unsigned vector_len = out_shape[last_long_dim];
+		const unsigned vector_len = t0_shape[last_long_dim];
 		// Create a running shape to count.
 		Shape counting_shape(last_long_dim, (int*)nullptr);
 		// Iterate through vectors.
 		while (true)
 		{
-			unsigned out_idx = 0, ten0_idx = 0, ten1_idx = 0;
+			unsigned out_idx = 0, t1_idx = 0;
 			for (unsigned d = 0; d < counting_shape.dim(); d++)
 			{
 				if (out._view[d] != 1) out_idx += counting_shape[d] * out._stride[d];
-				if (ten0._view[d] != 1) ten0_idx += counting_shape[d] * ten0._stride[d];
-				if (ten1_summed._view[d] != 1) ten1_idx += counting_shape[d] * ten1_summed._stride[d];
+				if (t1._view[d] != 1) t1_idx += counting_shape[d] * t1._stride[d];
 			}
 
-			unsigned count = 0u;
-			while (count++ < vector_len)
+			for (unsigned count = 0u; count < vector_len; count++)
 			{
-				out_data[out_idx] = ten0_data[ten0_idx] + ten1_summed_data[ten1_idx];
-				out_idx += dout, ten0_idx += dten0, ten1_idx += dten1;
+				out_data[out_idx] = ten0_data[out_idx] + t1_data[t1_idx];
+				out_idx++, t1_idx += dt1;
 			}
 
-			if (counting_shape.dim())
-			{
-				counting_shape[last_long_dim - 1]++;
+			if (!counting_shape.dim())
+				break;
 
-				for (int d = last_long_dim - 1; d > 0; d--)
+			counting_shape[-1]++;
+			for (int d = last_long_dim - 1; d > 0; d--)
+				if (counting_shape[d] >= t0_shape[d])
 				{
-					if (counting_shape[d] >= out_shape[d])
-					{
-						counting_shape[d] -= out_shape[d];
-						counting_shape[d - 1]++;
-					}
+					counting_shape[d] -= t0_shape[d];
+					counting_shape[d - 1]++;
 				}
-				// If you reach the end of the leading dimension you're done.
-				if (counting_shape[0] >= out_shape[0])
-					break;
-			}
-			else
+
+			// If you reach the end of the leading dimension you're done.
+			if (counting_shape[0] >= t0_shape[0])
 				break;
 		}
 	}
@@ -2555,6 +2543,8 @@ Tensor operator-(const Tensor& ten0, const Tensor& ten1)
 		SubOp(const Tensor& _sum, const Tensor& _sub, const Tensor& _out) : TensorOp{ "Subtraction", _out },
 			sum{ _sum.has_grad() ? _sum : Tensor() }, sub{ _sub.has_grad() ? _sub : Tensor() }
 		{
+			// Unsqueeze so that we can broacdast properly during backprop.
+			while (sub.is_init() && out.dim() > sub.dim()) sub = sub.unsqueeze(0);
 			if (sum.has_grad()) _relatives[0] = &sum;
 			if (sub.has_grad()) _relatives[1] = &sub;
 		}
@@ -2571,28 +2561,28 @@ Tensor operator-(const Tensor& ten0, const Tensor& ten1)
 	// --- Sanity checks ---
 
 	// Both tensor must be initialized.
-	TENSOR_CHECK(ten0.is_init(),
+	MACROGRAD_CHECK(ten0.is_init(),
 		"Trying to subtract two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(ten1.is_init(),
+	MACROGRAD_CHECK(ten1.is_init(),
 		"Trying to subtract two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(ten0.is_gpu() == ten1.is_gpu(),
+	MACROGRAD_CHECK(ten0.is_gpu() == ten1.is_gpu(),
 		"Trying to subtract two tensors in different devices is not allowed."
 	);
-	// Both tensor must have the same dimensionality to avoid ambiguity.
-	TENSOR_CHECK(ten0.dim() == ten1.dim(),
-		"Trying to subtract two tensors with different dimensions.\n"
-		"For broadcast addition please use view() or squeeze()/unsqueeze() to make dimensions match.\n"
+	// Ten0 must have more or equal the amount of dimensions of ten1 for broadcasting.
+	MACROGRAD_CHECK(ten0.dim() >= ten1.dim(),
+		"Trying to subtract two tensors with incompatible dimensions.\n"
+		"The dimensions of the tensors must match or the second tensor must broadcast to the first one.\n"
 		"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
 	);
 	// Both tensors must either have the same dimension sizes or one of them have size one.
-	// So that they can be broadcasted or summed without ambiguity.
-	for (unsigned i = 0; i < ten0.dim(); i++)
-		TENSOR_CHECK(ten0.size(i) == 1 || ten1.size(i) == 1 || ten0.size(i) == ten1.size(i),
-			"Trying to subtract two tensors with incompatible shapes.\n"
-			"Make sure shapes are compatible, meaning they have the same sizes or one of them is unitary for broadcasting.\n"
+	unsigned offset = ten0.dim() - ten1.dim();
+	for (unsigned i = offset; i < ten0.dim(); i++)
+		MACROGRAD_CHECK(ten0._view[i] == ten1._view[i - offset] || ten1._view[i - offset] == 1 || ten0._view[i] == 1,
+			"Trying to subtract two tensors with incompatible shapes for broadcasting.\n"
+			"Make sure shapes are compatible, meaning they have the same sizes or one of them is unitary.\n"
 			"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
 		);
 
@@ -2603,75 +2593,68 @@ Tensor operator-(const Tensor& ten0, const Tensor& ten1)
 	Tensor out(ten0.shape(), ten0.device(), requires_grad);
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten0_data = __dataof(ten0);
-	float* ten1_data = __dataof(ten1);
+	float* out_data = out.internal_data();
+	const float* ten0_data = ten0.internal_data();
+	const float* ten1_data = ten1.internal_data();
 
 	// Now we actually subtract the tensors.
 	if (out.is_gpu())
 		kernel_ops::shaped_subtract(out_data, ten0_data, ten1_data, out._view, ten1._view);
 	else
 	{
-		// Sum dimensions on ten1 if necessary.
-		Tensor ten1_summed = ten1.no_grad();
+		// Unsqueeze and sum dimensions on ten1 if necessary.
+		Tensor t1 = ten1.no_grad();
+		while (ten0.dim() > t1.dim()) t1 = t1.unsqueeze(0);
 		for (unsigned i = 0; i < ten0.dim(); i++)
-			if (ten0.size(i) == 1 && ten1_summed.size(i) != 1)
-				ten1_summed = ten1_summed.sum(i, true);
+			if (ten0._view[i] == 1 && t1._view[i] != 1)
+				t1 = t1.sum(i, true);
 
-		float* ten1_summed_data = __dataof(ten1_summed);
+		// Extract data.
+		const float* t1_data = t1.internal_data();
 
 		// Exptract the shapes.
-		Shape out_shape = out.shape();
-		Shape ten0_shape = ten0.shape();
-		Shape ten1_shape = ten1_summed.shape();
+		Shape t0_shape = ten0._view;
+		Shape t1_shape = t1._view;
 		// Find the last non-unitary dimension to iterate through.
 		unsigned last_long_dim = 0;
-		for (unsigned i = 0; i < out_shape.dim(); i++)
-			if (out_shape[i] > 1)
+		for (unsigned i = 0; i < t0_shape.dim(); i++)
+			if (t0_shape[i] > 1)
 				last_long_dim = i;
-		// Find the stride, will be 1 except for ten1 if broadcasting.
-		const unsigned dout = (out._view[last_long_dim] != 1) ? 1 : 0;
-		const unsigned dten0 = (ten0._view[last_long_dim] != 1) ? 1 : 0;
-		const unsigned dten1 = (ten1_summed._view[last_long_dim] != 1) ? 1 : 0;
+		// Find the stride, will be 0 if broadcasting on last dim.
+		const unsigned dt1 = (t1._view[last_long_dim] != 1) ? 1 : 0;
 		// Find the vector length to iterate.
-		const unsigned vector_len = out_shape[last_long_dim];
+		const unsigned vector_len = t0_shape[last_long_dim];
 		// Create a running shape to count.
 		Shape counting_shape(last_long_dim, (int*)nullptr);
 		// Iterate through vectors.
 		while (true)
 		{
-			unsigned out_idx = 0, ten0_idx = 0, ten1_idx = 0;
+			unsigned out_idx = 0, t1_idx = 0;
 			for (unsigned d = 0; d < counting_shape.dim(); d++)
 			{
 				if (out._view[d] != 1) out_idx += counting_shape[d] * out._stride[d];
-				if (ten0._view[d] != 1) ten0_idx += counting_shape[d] * ten0._stride[d];
-				if (ten1_summed._view[d] != 1) ten1_idx += counting_shape[d] * ten1_summed._stride[d];
+				if (t1._view[d] != 1) t1_idx += counting_shape[d] * t1._stride[d];
 			}
 
-			unsigned count = 0u;
-			while (count++ < vector_len)
+			for (unsigned count = 0u; count < vector_len; count++)
 			{
-				out_data[out_idx] = ten0_data[ten0_idx] - ten1_summed_data[ten1_idx];
-				out_idx += dout, ten0_idx += dten0, ten1_idx += dten1;
+				out_data[out_idx] = ten0_data[out_idx] - t1_data[t1_idx];
+				out_idx++, t1_idx += dt1;
 			}
 
-			if (counting_shape.dim())
-			{
-				counting_shape[last_long_dim - 1]++;
+			if (!counting_shape.dim())
+				break;
 
-				for (int d = last_long_dim - 1; d > 0; d--)
+			counting_shape[-1]++;
+			for (int d = last_long_dim - 1; d > 0; d--)
+				if (counting_shape[d] >= t0_shape[d])
 				{
-					if (counting_shape[d] >= out_shape[d])
-					{
-						counting_shape[d] -= out_shape[d];
-						counting_shape[d - 1]++;
-					}
+					counting_shape[d] -= t0_shape[d];
+					counting_shape[d - 1]++;
 				}
-				// If you reach the end of the leading dimension you're done.
-				if (counting_shape[0] >= out_shape[0])
-					break;
-			}
-			else
+
+			// If you reach the end of the leading dimension you're done.
+			if (counting_shape[0] >= t0_shape[0])
 				break;
 		}
 	}
@@ -2697,6 +2680,8 @@ Tensor operator*(const Tensor& ten0, const Tensor& ten1)
 		MulOp(const Tensor& _fac0, const Tensor& _fac1, const Tensor& _out) : TensorOp{ "Multiplication", _out },
 			fac0{ _fac0 }, fac1{ _fac1 }
 		{
+			// Unsqueeze so that we can broacdast properly during backprop.
+			while (out.dim() > fac1.dim()) fac1 = fac1.unsqueeze(0);
 			if (fac0.has_grad()) _relatives[0] = &fac0;
 			if (fac1.has_grad()) _relatives[1] = &fac1;
 		}
@@ -2713,28 +2698,28 @@ Tensor operator*(const Tensor& ten0, const Tensor& ten1)
 	// --- Sanity checks ---
 
 	// Both tensor must be initialized.
-	TENSOR_CHECK(ten0.is_init(),
+	MACROGRAD_CHECK(ten0.is_init(),
 		"Trying to multiply two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(ten1.is_init(),
+	MACROGRAD_CHECK(ten1.is_init(),
 		"Trying to multiply two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(ten0.is_gpu() == ten1.is_gpu(),
+	MACROGRAD_CHECK(ten0.is_gpu() == ten1.is_gpu(),
 		"Trying to multiply two tensors in different devices is not allowed."
 	);
-	// Both tensor must have the same dimensionality to avoid ambiguity.
-	TENSOR_CHECK(ten0.dim() == ten1.dim(),
-		"Trying to multiply two tensors with different dimensions.\n"
-		"For broadcast addition please use view() or squeeze()/unsqueeze() to make dimensions match.\n"
+	// Ten0 must have more or equal the amount of dimensions of ten1 for broadcasting.
+	MACROGRAD_CHECK(ten0.dim() >= ten1.dim(),
+		"Trying to multiply two tensors with incompatible dimensions.\n"
+		"The dimensions of the tensors must match or the second tensor must broadcast to the first one.\n"
 		"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
 	);
 	// Both tensors must either have the same dimension sizes or one of them have size one.
-	// So that they can be broadcasted or summed without ambiguity.
-	for (unsigned i = 0; i < ten0.dim(); i++)
-		TENSOR_CHECK(ten0.size(i) == 1 || ten1.size(i) == 1 || ten0.size(i) == ten1.size(i),
-			"Trying to multiply two tensors with incompatible shapes.\n"
-			"Make sure shapes are compatible, meaning they have the same sizes or one of them is unitary for broadcasting.\n"
+	unsigned offset = ten0.dim() - ten1.dim();
+	for (unsigned i = offset; i < ten0.dim(); i++)
+		MACROGRAD_CHECK(ten0._view[i] == ten1._view[i - offset] || ten1._view[i - offset] == 1 || ten0._view[i] == 1,
+			"Trying to multiply two tensors with incompatible shapes for broadcasting.\n"
+			"Make sure shapes are compatible, meaning they have the same sizes or one of them is unitary.\n"
 			"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
 		);
 
@@ -2745,75 +2730,68 @@ Tensor operator*(const Tensor& ten0, const Tensor& ten1)
 	Tensor out(ten0.shape(), ten0.device(), requires_grad);
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten0_data = __dataof(ten0);
-	float* ten1_data = __dataof(ten1);
+	float* out_data = out.internal_data();
+	const float* ten0_data = ten0.internal_data();
+	const float* ten1_data = ten1.internal_data();
 
 	// Now we actually multiply the tensors.
 	if (out.is_gpu())
 		kernel_ops::shaped_multiply(out_data, ten0_data, ten1_data, out._view, ten1._view);
 	else
 	{
-		// Sum dimensions on ten1 if necessary.
-		Tensor ten1_summed = ten1.no_grad();
+		// Unsqueeze and sum dimensions on ten1 if necessary.
+		Tensor t1 = ten1.no_grad();
+		while (ten0.dim() > t1.dim()) t1 = t1.unsqueeze(0);
 		for (unsigned i = 0; i < ten0.dim(); i++)
-			if (ten0.size(i) == 1 && ten1_summed.size(i) != 1)
-				ten1_summed = ten1_summed.sum(i, true);
+			if (ten0._view[i] == 1 && t1._view[i] != 1)
+				t1 = t1.sum(i, true);
 
-		float* ten1_summed_data = __dataof(ten1_summed);
+		// Extract data.
+		const float* t1_data = t1.internal_data();
 
 		// Exptract the shapes.
-		Shape out_shape = out.shape();
-		Shape ten0_shape = ten0.shape();
-		Shape ten1_shape = ten1_summed.shape();
+		Shape t0_shape = ten0._view;
+		Shape t1_shape = t1._view;
 		// Find the last non-unitary dimension to iterate through.
 		unsigned last_long_dim = 0;
-		for (unsigned i = 0; i < out_shape.dim(); i++)
-			if (out_shape[i] > 1)
+		for (unsigned i = 0; i < t0_shape.dim(); i++)
+			if (t0_shape[i] > 1)
 				last_long_dim = i;
-		// Find the stride, will be 1 except for ten1 if broadcasting.
-		const unsigned dout = (out._view[last_long_dim] != 1) ? 1 : 0;
-		const unsigned dten0 = (ten0._view[last_long_dim] != 1) ? 1 : 0;
-		const unsigned dten1 = (ten1_summed._view[last_long_dim] != 1) ? 1 : 0;
+		// Find the stride, will be 0 if broadcasting on last dim.
+		const unsigned dt1 = (t1._view[last_long_dim] != 1) ? 1 : 0;
 		// Find the vector length to iterate.
-		const unsigned vector_len = out_shape[last_long_dim];
+		const unsigned vector_len = t0_shape[last_long_dim];
 		// Create a running shape to count.
 		Shape counting_shape(last_long_dim, (int*)nullptr);
 		// Iterate through vectors.
 		while (true)
 		{
-			unsigned out_idx = 0, ten0_idx = 0, ten1_idx = 0;
+			unsigned out_idx = 0, t1_idx = 0;
 			for (unsigned d = 0; d < counting_shape.dim(); d++)
 			{
 				if (out._view[d] != 1) out_idx += counting_shape[d] * out._stride[d];
-				if (ten0._view[d] != 1) ten0_idx += counting_shape[d] * ten0._stride[d];
-				if (ten1_summed._view[d] != 1) ten1_idx += counting_shape[d] * ten1_summed._stride[d];
+				if (t1._view[d] != 1) t1_idx += counting_shape[d] * t1._stride[d];
 			}
 
-			unsigned count = 0u;
-			while (count++ < vector_len)
+			for (unsigned count = 0u; count < vector_len; count++)
 			{
-				out_data[out_idx] = ten0_data[ten0_idx] * ten1_summed_data[ten1_idx];
-				out_idx += dout, ten0_idx += dten0, ten1_idx += dten1;
+				out_data[out_idx] = ten0_data[out_idx] * t1_data[t1_idx];
+				out_idx++, t1_idx += dt1;
 			}
 
-			if (counting_shape.dim())
-			{
-				counting_shape[last_long_dim - 1]++;
+			if (!counting_shape.dim())
+				break;
 
-				for (int d = last_long_dim - 1; d > 0; d--)
+			counting_shape[-1]++;
+			for (int d = last_long_dim - 1; d > 0; d--)
+				if (counting_shape[d] >= t0_shape[d])
 				{
-					if (counting_shape[d] >= out_shape[d])
-					{
-						counting_shape[d] -= out_shape[d];
-						counting_shape[d - 1]++;
-					}
+					counting_shape[d] -= t0_shape[d];
+					counting_shape[d - 1]++;
 				}
-				// If you reach the end of the leading dimension you're done.
-				if (counting_shape[0] >= out_shape[0])
-					break;
-			}
-			else
+
+			// If you reach the end of the leading dimension you're done.
+			if (counting_shape[0] >= t0_shape[0])
 				break;
 		}
 	}
@@ -2839,6 +2817,8 @@ Tensor operator/(const Tensor& ten0, const Tensor& ten1)
 		DivOp(const Tensor& _num, const Tensor& _den, const Tensor& _out) : TensorOp{ "Division", _out },
 			num{ _num }, den{ _den }
 		{
+			// Unsqueeze so that we can broacdast properly during backprop.
+			while (out.dim() > den.dim()) den = den.unsqueeze(0);
 			if (num.has_grad()) _relatives[0] = &num;
 			if (den.has_grad()) _relatives[1] = &den;
 		}
@@ -2855,28 +2835,28 @@ Tensor operator/(const Tensor& ten0, const Tensor& ten1)
 	// --- Sanity checks ---
 
 	// Both tensor must be initialized.
-	TENSOR_CHECK(ten0.is_init(),
-		"Trying to add two tensors while the first tensor is empty."
+	MACROGRAD_CHECK(ten0.is_init(),
+		"Trying to divide two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(ten1.is_init(),
-		"Trying to add two tensors while the second tensor is empty."
+	MACROGRAD_CHECK(ten1.is_init(),
+		"Trying to divide two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(ten0.is_gpu() == ten1.is_gpu(),
-		"Trying to add two tensors in different devices is not allowed."
+	MACROGRAD_CHECK(ten0.is_gpu() == ten1.is_gpu(),
+		"Trying to divide two tensors in different devices is not allowed."
 	);
-	// Both tensor must have the same dimensionality to avoid ambiguity.
-	TENSOR_CHECK(ten0.dim() == ten1.dim(),
-		"Trying to add two tensors with different dimensions.\n"
-		"For broadcast addition please use view() or squeeze()/unsqueeze() to make dimensions match.\n"
+	// Ten0 must have more or equal the amount of dimensions of ten1 for broadcasting.
+	MACROGRAD_CHECK(ten0.dim() >= ten1.dim(),
+		"Trying to divide two tensors with incompatible dimensions.\n"
+		"The dimensions of the tensors must match or the second tensor must broadcast to the first one.\n"
 		"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
 	);
 	// Both tensors must either have the same dimension sizes or one of them have size one.
-	// So that they can be broadcasted or summed without ambiguity.
-	for (unsigned i = 0; i < ten0.dim(); i++)
-		TENSOR_CHECK(ten0.size(i) == 1 || ten1.size(i) == 1 || ten0.size(i) == ten1.size(i),
-			"Trying to add two tensors with incompatible shapes.\n"
-			"Make sure shapes are compatible, meaning they have the same sizes or one of them is one for broadcasting.\n"
+	unsigned offset = ten0.dim() - ten1.dim();
+	for (unsigned i = offset; i < ten0.dim(); i++)
+		MACROGRAD_CHECK(ten0._view[i] == ten1._view[i - offset] || ten1._view[i - offset] == 1 || ten0._view[i] == 1,
+			"Trying to divide two tensors with incompatible shapes for broadcasting.\n"
+			"Make sure shapes are compatible, meaning they have the same sizes or one of them is unitary.\n"
 			"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
 		);
 
@@ -2887,75 +2867,68 @@ Tensor operator/(const Tensor& ten0, const Tensor& ten1)
 	Tensor out(ten0.shape(), ten0.device(), requires_grad);
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten0_data = __dataof(ten0);
-	float* ten1_data = __dataof(ten1);
+	float* out_data = out.internal_data();
+	const float* ten0_data = ten0.internal_data();
+	const float* ten1_data = ten1.internal_data();
 
 	// Now we actually divide the tensors.
 	if (out.is_gpu())
 		kernel_ops::shaped_divide(out_data, ten0_data, ten1_data, out._view, ten1._view);
 	else
 	{
-		// Sum dimensions on ten1 if necessary.
-		Tensor ten1_summed = ten1.no_grad();
+		// Unsqueeze and sum dimensions on ten1 if necessary.
+		Tensor t1 = ten1.no_grad();
+		while (ten0.dim() > t1.dim()) t1 = t1.unsqueeze(0);
 		for (unsigned i = 0; i < ten0.dim(); i++)
-			if (ten0.size(i) == 1 && ten1_summed.size(i) != 1)
-				ten1_summed = ten1_summed.sum(i, true);
+			if (ten0._view[i] == 1 && t1._view[i] != 1)
+				t1 = t1.sum(i, true);
 
-		float* ten1_summed_data = __dataof(ten1_summed);
+		// Extract data.
+		const float* t1_data = t1.internal_data();
 
 		// Exptract the shapes.
-		Shape out_shape = out.shape();
-		Shape ten0_shape = ten0.shape();
-		Shape ten1_shape = ten1_summed.shape();
+		Shape t0_shape = ten0._view;
+		Shape t1_shape = t1._view;
 		// Find the last non-unitary dimension to iterate through.
 		unsigned last_long_dim = 0;
-		for (unsigned i = 0; i < out_shape.dim(); i++)
-			if (out_shape[i] > 1)
+		for (unsigned i = 0; i < t0_shape.dim(); i++)
+			if (t0_shape[i] > 1)
 				last_long_dim = i;
-		// Find the stride, will be 1 except for ten1 if broadcasting.
-		const unsigned dout = (out._view[last_long_dim] != 1) ? 1 : 0;
-		const unsigned dten0 = (ten0._view[last_long_dim] != 1) ? 1 : 0;
-		const unsigned dten1 = (ten1_summed._view[last_long_dim] != 1) ? 1 : 0;
+		// Find the stride, will be 0 if broadcasting on last dim.
+		const unsigned dt1 = (t1._view[last_long_dim] != 1) ? 1 : 0;
 		// Find the vector length to iterate.
-		const unsigned vector_len = out_shape[last_long_dim];
+		const unsigned vector_len = t0_shape[last_long_dim];
 		// Create a running shape to count.
 		Shape counting_shape(last_long_dim, (int*)nullptr);
 		// Iterate through vectors.
 		while (true)
 		{
-			unsigned out_idx = 0, ten0_idx = 0, ten1_idx = 0;
+			unsigned out_idx = 0, t1_idx = 0;
 			for (unsigned d = 0; d < counting_shape.dim(); d++)
 			{
 				if (out._view[d] != 1) out_idx += counting_shape[d] * out._stride[d];
-				if (ten0._view[d] != 1) ten0_idx += counting_shape[d] * ten0._stride[d];
-				if (ten1_summed._view[d] != 1) ten1_idx += counting_shape[d] * ten1_summed._stride[d];
+				if (t1._view[d] != 1) t1_idx += counting_shape[d] * t1._stride[d];
 			}
 
-			unsigned count = 0u;
-			while (count++ < vector_len)
+			for (unsigned count = 0u; count < vector_len; count++)
 			{
-				out_data[out_idx] = ten0_data[ten0_idx] / ten1_summed_data[ten1_idx];
-				out_idx += dout, ten0_idx += dten0, ten1_idx += dten1;
+				out_data[out_idx] = ten0_data[out_idx] / t1_data[t1_idx];
+				out_idx++, t1_idx += dt1;
 			}
 
-			if (counting_shape.dim())
-			{
-				counting_shape[last_long_dim - 1]++;
+			if (!counting_shape.dim())
+				break;
 
-				for (int d = last_long_dim - 1; d > 0; d--)
+			counting_shape[-1]++;
+			for (int d = last_long_dim - 1; d > 0; d--)
+				if (counting_shape[d] >= t0_shape[d])
 				{
-					if (counting_shape[d] >= out_shape[d])
-					{
-						counting_shape[d] -= out_shape[d];
-						counting_shape[d - 1]++;
-					}
+					counting_shape[d] -= t0_shape[d];
+					counting_shape[d - 1]++;
 				}
-				// If you reach the end of the leading dimension you're done.
-				if (counting_shape[0] >= out_shape[0])
-					break;
-			}
-			else
+
+			// If you reach the end of the leading dimension you're done.
+			if (counting_shape[0] >= t0_shape[0])
 				break;
 		}
 	}
@@ -2992,7 +2965,7 @@ Tensor operator+(const Tensor& ten, float val)
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(ten.is_init(),
+	MACROGRAD_CHECK(ten.is_init(),
 		"Trying to do scalar addition with an empty tensor."
 	);
 
@@ -3000,19 +2973,18 @@ Tensor operator+(const Tensor& ten, float val)
 	Tensor out(ten.shape(), ten.device(), ten.has_grad());
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten_data = __dataof(ten);
+	float* out_data = out.internal_data();
+	const float* ten_data = ten.internal_data();
 
-	// Now we actually sum the tensors.
+	// Get element count.
+	unsigned numel = ten.numel();
+
+	// Now we actually add the scalar.
 	if (out.is_gpu())
-		kernel_ops::add_scalar(out_data, ten_data, &val, out.numel(), false, 1.f);
-	else
-	{
-		// Iterate through all elements.
-		int idx = -1, _numel = int(ten.numel());
-		while (++idx < _numel)
-			out_data[idx] = ten_data[idx] + val;
-	}
+		kernel_ops::add_scalar(out_data, ten_data, &val, numel, false, 1.f);
+
+	else for (unsigned i = 0u; i< numel; i++)
+		out_data[i] = ten_data[i] + val;
 
 	// If it was a gradient operation store a ScaAddOp instance.
 	if (out.has_grad())
@@ -3054,7 +3026,7 @@ Tensor operator*(const Tensor& ten, float val)
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(ten.is_init(),
+	MACROGRAD_CHECK(ten.is_init(),
 		"Trying to do scalar multiplication with an empty tensor."
 	);
 
@@ -3062,21 +3034,20 @@ Tensor operator*(const Tensor& ten, float val)
 	Tensor out(ten.shape(), ten.device(), ten.has_grad());
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten_data = __dataof(ten);
+	float* out_data = out.internal_data();
+	const float* ten_data = ten.internal_data();
 
-	// Now we actually multiply the tensors.
+	// Get element count.
+	unsigned numel = ten.numel();
+
+	// Now we actually multiply the scalar.
 	if (out.is_gpu())
-		kernel_ops::multiply_scalar(out_data, ten_data, &val, out.numel(), false, 1.f);
-	else
-	{
-		// Iterate through all elements.
-		int idx = -1, _numel = int(ten.numel());
-		while (++idx < _numel)
-			out_data[idx] = ten_data[idx] * val;
-	}
+		kernel_ops::multiply_scalar(out_data, ten_data, &val, numel, false, 1.f);
 
-	// If it was a gradient operation store a ScaAddOp instance.
+	else for (unsigned i = 0u; i < numel; i++)
+		out_data[i] = ten_data[i] * val;
+
+	// If it was a gradient operation store a ScaMulOp instance.
 	if (out.has_grad())
 		out._internals->op = new ScaMulOp(ten, out, val);
 
@@ -3118,7 +3089,7 @@ Tensor operator-(float val, const Tensor& ten)
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(ten.is_init(),
+	MACROGRAD_CHECK(ten.is_init(),
 		"Trying to do scalar subtraction with an empty tensor."
 	);
 
@@ -3126,19 +3097,18 @@ Tensor operator-(float val, const Tensor& ten)
 	Tensor out(ten.shape(), ten.device(), ten.has_grad());
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten_data = __dataof(ten);
+	float* out_data = out.internal_data();
+	const float* ten_data = ten.internal_data();
 
-	// Now we actually subtract the tensors.
+	// Get element count.
+	unsigned numel = ten.numel();
+
+	// Now we actually subtract from scalar.
 	if (out.is_gpu())
-		kernel_ops::subtract_from_scalar(out_data, ten_data, val, out.numel());
-	else
-	{
-		// Iterate through all elements.
-		int idx = -1, _numel = int(ten.numel());
-		while (++idx < _numel)
-			out_data[idx] = val - ten_data[idx];
-	}
+		kernel_ops::subtract_from_scalar(out_data, ten_data, val, numel);
+
+	else for (unsigned i = 0u; i < numel; i++)
+		out_data[i] = val - ten_data[i];
 
 	// If it was a gradient operation store a ScaSubOp instance.
 	if (out.has_grad())
@@ -3177,7 +3147,7 @@ Tensor operator/(float val, const Tensor& ten)
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(ten.is_init(),
+	MACROGRAD_CHECK(ten.is_init(),
 		"Trying to do scalar division with an empty tensor."
 	);
 
@@ -3185,19 +3155,18 @@ Tensor operator/(float val, const Tensor& ten)
 	Tensor out(ten.shape(), ten.device(), ten.has_grad());
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten_data = __dataof(ten);
+	float* out_data = out.internal_data();
+	const float* ten_data = ten.internal_data();
 
-	// Now we actually divide the tensors.
+	// Get element count.
+	unsigned numel = ten.numel();
+
+	// Now we actually divide from scalar.
 	if (out.is_gpu())
-		kernel_ops::divide_from_scalar(out_data, ten_data, val, out.numel());
-	else
-	{
-		// Iterate through all elements.
-		int idx = -1, _numel = int(ten.numel());
-		while (++idx < _numel)
-			out_data[idx] = val / ten_data[idx];
-	}
+		kernel_ops::divide_from_scalar(out_data, ten_data, val, numel);
+
+	else for (unsigned i = 0u; i < numel; i++)
+		out_data[i] = val / ten_data[i];
 
 	// If it was a gradient operation store a ScaDivOp instance.
 	if (out.has_grad())
@@ -3231,7 +3200,7 @@ Tensor Tensor::operator-() const
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to negate an empty tensor."
 	);
 
@@ -3239,22 +3208,20 @@ Tensor Tensor::operator-() const
 	Tensor out(shape(), device(), has_grad());
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten_data = __data;
+	float* out_data = out.internal_data();
+	const float* ten_data = internal_data();
+
+	// Get element count.
+	unsigned numel = out.numel();
 
 	// Now we actually negate the tensor.
 	if (out.is_gpu())
 	{
 		float neg1 = -1.f;
-		kernel_ops::multiply_scalar(out_data, ten_data, &neg1, out.numel(), false, 1.f);
+		kernel_ops::multiply_scalar(out_data, ten_data, &neg1, numel, false, 1.f);
 	}
-	else
-	{
-		// Iterate through all elements.
-		int idx = -1, _numel = int(numel());
-		while (++idx < _numel)
-			out_data[idx] = -ten_data[idx];
-	}
+	else for (unsigned i = 0u; i < numel; i++)
+		out_data[i] = -ten_data[i];
 
 	// If it was a gradient operation store a NegOp instance.
 	if (out.has_grad())
@@ -3275,18 +3242,18 @@ Tensor operator<(const Tensor& ten0, const Tensor& ten1)
 	// --- Sanity checks ---
 
 	// Both tensor must be initialized.
-	TENSOR_CHECK(ten0.is_init(),
+	MACROGRAD_CHECK(ten0.is_init(),
 		"Trying to compare two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(ten1.is_init(),
+	MACROGRAD_CHECK(ten1.is_init(),
 		"Trying to compare two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(ten0.is_gpu() == ten1.is_gpu(),
+	MACROGRAD_CHECK(ten0.is_gpu() == ten1.is_gpu(),
 		"Trying to compare two tensors in different devices is not allowed."
 	);
 	// Ten0 must have more or equal the amount of dimensions of ten1 for broadcasting.
-	TENSOR_CHECK(ten0.dim() >= ten1.dim(),
+	MACROGRAD_CHECK(ten0.dim() >= ten1.dim(),
 		"Trying to compare two tensors with incompatible dimensions.\n"
 		"The dimensions of the tensors must match or the second tensor must cleanly broadcast to the first one.\n"
 		"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
@@ -3297,7 +3264,7 @@ Tensor operator<(const Tensor& ten0, const Tensor& ten1)
 	for (unsigned i = offset; i < ten0.dim(); i++)
 	{
 		unsigned j = i - offset;
-		TENSOR_CHECK(ten0._view[i] == ten1._view[j] || (ten1._view[j] == 1 && !has_dim),
+		MACROGRAD_CHECK(ten0._view[i] == ten1._view[j] || (ten1._view[j] == 1 && !has_dim),
 			"Trying to compare two tensors with incompatible shapes for broadcasting.\n"
 			"Make sure shapes are compatible, meaning they have the same sizes or the second one is unitary.\n"
 			"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
@@ -3310,9 +3277,9 @@ Tensor operator<(const Tensor& ten0, const Tensor& ten1)
 	Tensor out(ten0.shape(), ten0.device(), false);
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten0_data = __dataof(ten0);
-	float* ten1_data = __dataof(ten1);
+	float* out_data = out.internal_data();
+	const float* ten0_data = ten0.internal_data();
+	const float* ten1_data = ten1.internal_data();
 
 	// Get counts.
 	unsigned numel0 = ten0.numel();
@@ -3334,18 +3301,18 @@ Tensor operator>(const Tensor& ten0, const Tensor& ten1)
 	// --- Sanity checks ---
 
 	// Both tensor must be initialized.
-	TENSOR_CHECK(ten0.is_init(),
+	MACROGRAD_CHECK(ten0.is_init(),
 		"Trying to compare two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(ten1.is_init(),
+	MACROGRAD_CHECK(ten1.is_init(),
 		"Trying to compare two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(ten0.is_gpu() == ten1.is_gpu(),
+	MACROGRAD_CHECK(ten0.is_gpu() == ten1.is_gpu(),
 		"Trying to compare two tensors in different devices is not allowed."
 	);
 	// Ten0 must have more or equal the amount of dimensions of ten1 for broadcasting.
-	TENSOR_CHECK(ten0.dim() >= ten1.dim(),
+	MACROGRAD_CHECK(ten0.dim() >= ten1.dim(),
 		"Trying to compare two tensors with incompatible dimensions.\n"
 		"The dimensions of the tensors must match or the second tensor must cleanly broadcast to the first one.\n"
 		"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
@@ -3356,7 +3323,7 @@ Tensor operator>(const Tensor& ten0, const Tensor& ten1)
 	for (unsigned i = offset; i < ten0.dim(); i++)
 	{
 		unsigned j = i - offset;
-		TENSOR_CHECK(ten0._view[i] == ten1._view[j] || (ten1._view[j] == 1 && !has_dim),
+		MACROGRAD_CHECK(ten0._view[i] == ten1._view[j] || (ten1._view[j] == 1 && !has_dim),
 			"Trying to compare two tensors with incompatible shapes for broadcasting.\n"
 			"Make sure shapes are compatible, meaning they have the same sizes or the second one is unitary.\n"
 			"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
@@ -3369,9 +3336,9 @@ Tensor operator>(const Tensor& ten0, const Tensor& ten1)
 	Tensor out(ten0.shape(), ten0.device(), false);
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten0_data = __dataof(ten0);
-	float* ten1_data = __dataof(ten1);
+	float* out_data = out.internal_data();
+	const float* ten0_data = ten0.internal_data();
+	const float* ten1_data = ten1.internal_data();
 
 	// Get counts.
 	unsigned numel0 = ten0.numel();
@@ -3393,18 +3360,18 @@ Tensor operator<=(const Tensor& ten0, const Tensor& ten1)
 	// --- Sanity checks ---
 
 // Both tensor must be initialized.
-	TENSOR_CHECK(ten0.is_init(),
+	MACROGRAD_CHECK(ten0.is_init(),
 		"Trying to compare two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(ten1.is_init(),
+	MACROGRAD_CHECK(ten1.is_init(),
 		"Trying to compare two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(ten0.is_gpu() == ten1.is_gpu(),
+	MACROGRAD_CHECK(ten0.is_gpu() == ten1.is_gpu(),
 		"Trying to compare two tensors in different devices is not allowed."
 	);
 	// Ten0 must have more or equal the amount of dimensions of ten1 for broadcasting.
-	TENSOR_CHECK(ten0.dim() >= ten1.dim(),
+	MACROGRAD_CHECK(ten0.dim() >= ten1.dim(),
 		"Trying to compare two tensors with incompatible dimensions.\n"
 		"The dimensions of the tensors must match or the second tensor must cleanly broadcast to the first one.\n"
 		"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
@@ -3415,7 +3382,7 @@ Tensor operator<=(const Tensor& ten0, const Tensor& ten1)
 	for (unsigned i = offset; i < ten0.dim(); i++)
 	{
 		unsigned j = i - offset;
-		TENSOR_CHECK(ten0._view[i] == ten1._view[j] || (ten1._view[j] == 1 && !has_dim),
+		MACROGRAD_CHECK(ten0._view[i] == ten1._view[j] || (ten1._view[j] == 1 && !has_dim),
 			"Trying to compare two tensors with incompatible shapes for broadcasting.\n"
 			"Make sure shapes are compatible, meaning they have the same sizes or the second one is unitary.\n"
 			"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
@@ -3428,9 +3395,9 @@ Tensor operator<=(const Tensor& ten0, const Tensor& ten1)
 	Tensor out(ten0.shape(), ten0.device(), false);
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten0_data = __dataof(ten0);
-	float* ten1_data = __dataof(ten1);
+	float* out_data = out.internal_data();
+	const float* ten0_data = ten0.internal_data();
+	const float* ten1_data = ten1.internal_data();
 
 	// Get counts.
 	unsigned numel0 = ten0.numel();
@@ -3452,18 +3419,18 @@ Tensor operator>=(const Tensor& ten0, const Tensor& ten1)
 	// --- Sanity checks ---
 
 // Both tensor must be initialized.
-	TENSOR_CHECK(ten0.is_init(),
+	MACROGRAD_CHECK(ten0.is_init(),
 		"Trying to compare two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(ten1.is_init(),
+	MACROGRAD_CHECK(ten1.is_init(),
 		"Trying to compare two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(ten0.is_gpu() == ten1.is_gpu(),
+	MACROGRAD_CHECK(ten0.is_gpu() == ten1.is_gpu(),
 		"Trying to compare two tensors in different devices is not allowed."
 	);
 	// Ten0 must have more or equal the amount of dimensions of ten1 for broadcasting.
-	TENSOR_CHECK(ten0.dim() >= ten1.dim(),
+	MACROGRAD_CHECK(ten0.dim() >= ten1.dim(),
 		"Trying to compare two tensors with incompatible dimensions.\n"
 		"The dimensions of the tensors must match or the second tensor must cleanly broadcast to the first one.\n"
 		"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
@@ -3474,7 +3441,7 @@ Tensor operator>=(const Tensor& ten0, const Tensor& ten1)
 	for (unsigned i = offset; i < ten0.dim(); i++)
 	{
 		unsigned j = i - offset;
-		TENSOR_CHECK(ten0._view[i] == ten1._view[j] || (ten1._view[j] == 1 && !has_dim),
+		MACROGRAD_CHECK(ten0._view[i] == ten1._view[j] || (ten1._view[j] == 1 && !has_dim),
 			"Trying to compare two tensors with incompatible shapes for broadcasting.\n"
 			"Make sure shapes are compatible, meaning they have the same sizes or the second one is unitary.\n"
 			"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
@@ -3487,9 +3454,9 @@ Tensor operator>=(const Tensor& ten0, const Tensor& ten1)
 	Tensor out(ten0.shape(), ten0.device(), false);
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten0_data = __dataof(ten0);
-	float* ten1_data = __dataof(ten1);
+	float* out_data = out.internal_data();
+	const float* ten0_data = ten0.internal_data();
+	const float* ten1_data = ten1.internal_data();
 
 	// Get counts.
 	unsigned numel0 = ten0.numel();
@@ -3511,18 +3478,18 @@ Tensor operator==(const Tensor& ten0, const Tensor& ten1)
 	// --- Sanity checks ---
 
 // Both tensor must be initialized.
-	TENSOR_CHECK(ten0.is_init(),
+	MACROGRAD_CHECK(ten0.is_init(),
 		"Trying to compare two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(ten1.is_init(),
+	MACROGRAD_CHECK(ten1.is_init(),
 		"Trying to compare two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(ten0.is_gpu() == ten1.is_gpu(),
+	MACROGRAD_CHECK(ten0.is_gpu() == ten1.is_gpu(),
 		"Trying to compare two tensors in different devices is not allowed."
 	);
 	// Ten0 must have more or equal the amount of dimensions of ten1 for broadcasting.
-	TENSOR_CHECK(ten0.dim() >= ten1.dim(),
+	MACROGRAD_CHECK(ten0.dim() >= ten1.dim(),
 		"Trying to compare two tensors with incompatible dimensions.\n"
 		"The dimensions of the tensors must match or the second tensor must cleanly broadcast to the first one.\n"
 		"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
@@ -3533,7 +3500,7 @@ Tensor operator==(const Tensor& ten0, const Tensor& ten1)
 	for (unsigned i = offset; i < ten0.dim(); i++)
 	{
 		unsigned j = i - offset;
-		TENSOR_CHECK(ten0._view[i] == ten1._view[j] || (ten1._view[j] == 1 && !has_dim),
+		MACROGRAD_CHECK(ten0._view[i] == ten1._view[j] || (ten1._view[j] == 1 && !has_dim),
 			"Trying to compare two tensors with incompatible shapes for broadcasting.\n"
 			"Make sure shapes are compatible, meaning they have the same sizes or the second one is unitary.\n"
 			"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
@@ -3546,9 +3513,9 @@ Tensor operator==(const Tensor& ten0, const Tensor& ten1)
 	Tensor out(ten0.shape(), ten0.device(), false);
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten0_data = __dataof(ten0);
-	float* ten1_data = __dataof(ten1);
+	float* out_data = out.internal_data();
+	const float* ten0_data = ten0.internal_data();
+	const float* ten1_data = ten1.internal_data();
 
 	// Get counts.
 	unsigned numel0 = ten0.numel();
@@ -3570,18 +3537,18 @@ Tensor operator!=(const Tensor& ten0, const Tensor& ten1)
 	// --- Sanity checks ---
 
 // Both tensor must be initialized.
-	TENSOR_CHECK(ten0.is_init(),
+	MACROGRAD_CHECK(ten0.is_init(),
 		"Trying to compare two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(ten1.is_init(),
+	MACROGRAD_CHECK(ten1.is_init(),
 		"Trying to compare two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(ten0.is_gpu() == ten1.is_gpu(),
+	MACROGRAD_CHECK(ten0.is_gpu() == ten1.is_gpu(),
 		"Trying to compare two tensors in different devices is not allowed."
 	);
 	// Ten0 must have more or equal the amount of dimensions of ten1 for broadcasting.
-	TENSOR_CHECK(ten0.dim() >= ten1.dim(),
+	MACROGRAD_CHECK(ten0.dim() >= ten1.dim(),
 		"Trying to compare two tensors with incompatible dimensions.\n"
 		"The dimensions of the tensors must match or the second tensor must cleanly broadcast to the first one.\n"
 		"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
@@ -3592,7 +3559,7 @@ Tensor operator!=(const Tensor& ten0, const Tensor& ten1)
 	for (unsigned i = offset; i < ten0.dim(); i++)
 	{
 		unsigned j = i - offset;
-		TENSOR_CHECK(ten0._view[i] == ten1._view[j] || (ten1._view[j] == 1 && !has_dim),
+		MACROGRAD_CHECK(ten0._view[i] == ten1._view[j] || (ten1._view[j] == 1 && !has_dim),
 			"Trying to compare two tensors with incompatible shapes for broadcasting.\n"
 			"Make sure shapes are compatible, meaning they have the same sizes or the second one is unitary.\n"
 			"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
@@ -3605,9 +3572,9 @@ Tensor operator!=(const Tensor& ten0, const Tensor& ten1)
 	Tensor out(ten0.shape(), ten0.device(), false);
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten0_data = __dataof(ten0);
-	float* ten1_data = __dataof(ten1);
+	float* out_data = out.internal_data();
+	const float* ten0_data = ten0.internal_data();
+	const float* ten1_data = ten1.internal_data();
 
 	// Get counts.
 	unsigned numel0 = ten0.numel();
@@ -3627,7 +3594,7 @@ Tensor operator!=(const Tensor& ten0, const Tensor& ten1)
 Tensor operator<(const Tensor& ten, float val)
 {
 	// Tensor must be initialized.
-	TENSOR_CHECK(ten.is_init(),
+	MACROGRAD_CHECK(ten.is_init(),
 		"Trying to do scalar comparisson with an empty tensor."
 	);
 
@@ -3635,8 +3602,8 @@ Tensor operator<(const Tensor& ten, float val)
 	Tensor out(ten.shape(), ten.device(), false);
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten_data = __dataof(ten);
+	float* out_data = out.internal_data();
+	const float* ten_data = ten.internal_data();
 
 	// Get count.
 	unsigned numel = ten.numel();
@@ -3655,7 +3622,7 @@ Tensor operator<(const Tensor& ten, float val)
 Tensor operator>(const Tensor& ten, float val)
 {
 	// Tensor must be initialized.
-	TENSOR_CHECK(ten.is_init(),
+	MACROGRAD_CHECK(ten.is_init(),
 		"Trying to do scalar comparisson with an empty tensor."
 	);
 
@@ -3663,8 +3630,8 @@ Tensor operator>(const Tensor& ten, float val)
 	Tensor out(ten.shape(), ten.device(), false);
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten_data = __dataof(ten);
+	float* out_data = out.internal_data();
+	const float* ten_data = ten.internal_data();
 
 	// Get count.
 	unsigned numel = ten.numel();
@@ -3683,7 +3650,7 @@ Tensor operator>(const Tensor& ten, float val)
 Tensor operator<=(const Tensor& ten, float val)
 {
 	// Tensor must be initialized.
-	TENSOR_CHECK(ten.is_init(),
+	MACROGRAD_CHECK(ten.is_init(),
 		"Trying to do scalar comparisson with an empty tensor."
 	);
 
@@ -3691,8 +3658,8 @@ Tensor operator<=(const Tensor& ten, float val)
 	Tensor out(ten.shape(), ten.device(), false);
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten_data = __dataof(ten);
+	float* out_data = out.internal_data();
+	const float* ten_data = ten.internal_data();
 
 	// Get count.
 	unsigned numel = ten.numel();
@@ -3711,7 +3678,7 @@ Tensor operator<=(const Tensor& ten, float val)
 Tensor operator>=(const Tensor& ten, float val)
 {
 	// Tensor must be initialized.
-	TENSOR_CHECK(ten.is_init(),
+	MACROGRAD_CHECK(ten.is_init(),
 		"Trying to do scalar comparisson with an empty tensor."
 	);
 
@@ -3719,8 +3686,8 @@ Tensor operator>=(const Tensor& ten, float val)
 	Tensor out(ten.shape(), ten.device(), false);
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten_data = __dataof(ten);
+	float* out_data = out.internal_data();
+	const float* ten_data = ten.internal_data();
 
 	// Get count.
 	unsigned numel = ten.numel();
@@ -3739,7 +3706,7 @@ Tensor operator>=(const Tensor& ten, float val)
 Tensor operator==(const Tensor& ten, float val)
 {
 	// Tensor must be initialized.
-	TENSOR_CHECK(ten.is_init(),
+	MACROGRAD_CHECK(ten.is_init(),
 		"Trying to do scalar comparisson with an empty tensor."
 	);
 
@@ -3747,8 +3714,8 @@ Tensor operator==(const Tensor& ten, float val)
 	Tensor out(ten.shape(), ten.device(), false);
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten_data = __dataof(ten);
+	float* out_data = out.internal_data();
+	const float* ten_data = ten.internal_data();
 
 	// Get count.
 	unsigned numel = ten.numel();
@@ -3767,7 +3734,7 @@ Tensor operator==(const Tensor& ten, float val)
 Tensor operator!=(const Tensor& ten, float val)
 {
 	// Tensor must be initialized.
-	TENSOR_CHECK(ten.is_init(),
+	MACROGRAD_CHECK(ten.is_init(),
 		"Trying to do scalar comparisson with an empty tensor."
 	);
 
@@ -3775,8 +3742,8 @@ Tensor operator!=(const Tensor& ten, float val)
 	Tensor out(ten.shape(), ten.device(), false);
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten_data = __dataof(ten);
+	float* out_data = out.internal_data();
+	const float* ten_data = ten.internal_data();
 
 	// Get count.
 	unsigned numel = ten.numel();
@@ -3843,58 +3810,59 @@ Tensor& Tensor::operator+=(const Tensor& other)
 		return *this = *this + other.no_grad();
 
 	// --- Sanity checks ---
-	
+
 	// Both tensors must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to add two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(other.is_init(),
+	MACROGRAD_CHECK(other.is_init(),
 		"Trying to add two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(is_gpu() == other.is_gpu(),
+	MACROGRAD_CHECK(is_gpu() == other.is_gpu(),
 		"Trying to add two tensors in different devices is not allowed."
 	);
-	// Both tensor must have the same dimensionality to avoid ambiguity.
-	TENSOR_CHECK(dim() == other.dim(),
-		"Trying to add two tensors with different dimensions.\n"
-		"For broadcast addition please use view() or squeeze()/unsqueeze() to make dimensions match.\n"
-		"Found shapes | Tensor0: %s | Tensor1: %s", _view.str(), other._view.str()
+	// Ten0 must have more or equal the amount of dimensions of other for broadcasting.
+	MACROGRAD_CHECK(dim() >= other.dim(),
+		"Trying to add two tensors with incompatible dimensions.\n"
+		"The dimensions of the tensors must match or the second tensor must broadcast to the first one.\n"
+		"Found shapes | This: %s | Other: %s", _view.str(), other._view.str()
 	);
 	// Both tensors must either have the same dimension sizes or one of them have size one.
-	// So that they can be broadcasted or summed without ambiguity.
-	for (unsigned i = 0; i < dim(); i++)
-		TENSOR_CHECK(size(i) == 1 || other.size(i) == 1 || size(i) == other.size(i),
-			"Trying to add two tensors with incompatible shapes.\n"
-			"Make sure shapes are compatible, meaning they have the same sizes or one of them is one for broadcasting.\n"
-			"Found shapes | Tensor0: %s | Tensor1: %s", _view.str(), other._view.str()
+	unsigned offset = dim() - other.dim();
+	for (unsigned i = offset; i < dim(); i++)
+		MACROGRAD_CHECK(_view[i] == other._view[i - offset] || other._view[i - offset] == 1 || _view[i] == 1,
+			"Trying to add two tensors with incompatible shapes for broadcasting.\n"
+			"Make sure shapes are compatible, meaning they have the same sizes or one of them is unitary.\n"
+			"Found shapes | This: %s | Other: %s", _view.str(), other._view.str()
 		);
 
 	// Extract the data.
-	float* out_data = __data;
-	float* ten_data = __dataof(other);
+	float* out_data = internal_data();
+	const float* ten_data = other.internal_data();
 
-	// Now we actually sum the tensors.
+	// Now we actually add the tensors.
 	if (is_gpu())
 		kernel_ops::shaped_add(out_data, out_data, ten_data, _view, other._view);
 	else
 	{
-		// Sum dimensions on other if necessary.
-		Tensor other_summed = other.no_grad();
-		for (unsigned i = 0; i < other.dim(); i++)
-			if (_view[i] == 1 && other_summed.size(i) != 1)
-				other_summed = other_summed.sum(i, true);
+		// Unsqueeze and sum dimensions on other if necessary.
+		Tensor t1 = other.no_grad();
+		while (dim() > t1.dim()) t1 = t1.unsqueeze(0);
+		for (unsigned i = 0; i < dim(); i++)
+			if (_view[i] == 1 && t1._view[i] != 1)
+				t1 = t1.sum(i, true);
 
-		float* other_summed_data = __dataof(other_summed);
+		// Extract data.
+		const float* t1_data = t1.internal_data();
 
 		// Find the last non-unitary dimension to iterate through.
 		unsigned last_long_dim = 0;
 		for (unsigned i = 0; i < _view.dim(); i++)
 			if (_view[i] > 1)
 				last_long_dim = i;
-		// Find the stride, will be 1 except for ten1 if broadcasting.
-		const unsigned dout = (_view[last_long_dim] != 1) ? 1 : 0;
-		const unsigned dten = (other._view[last_long_dim] != 1) ? 1 : 0;
+		// Find the stride, will be 0 if broadcasting on last dim.
+		const unsigned dt1 = (t1._view[last_long_dim] != 1) ? 1 : 0;
 		// Find the vector length to iterate.
 		const unsigned vector_len = _view[last_long_dim];
 		// Create a running shape to count.
@@ -3902,31 +3870,30 @@ Tensor& Tensor::operator+=(const Tensor& other)
 		// Iterate through vectors.
 		while (true)
 		{
-			unsigned out_idx = 0, ten_idx = 0;
+			unsigned out_idx = 0, t1_idx = 0;
 			for (unsigned d = 0; d < counting_shape.dim(); d++)
 			{
 				if (_view[d] != 1) out_idx += counting_shape[d] * _stride[d];
-				if (other_summed._view[d] != 1) ten_idx += counting_shape[d] * other_summed._stride[d];
+				if (t1._view[d] != 1) t1_idx += counting_shape[d] * t1._stride[d];
 			}
 
-			for(unsigned count = 0u;count < vector_len; count++)
+			for (unsigned count = 0u; count < vector_len; count++)
 			{
-				out_data[out_idx] += other_summed_data[ten_idx];
-				out_idx += dout, ten_idx += dten;
+				out_data[out_idx] += t1_data[t1_idx];
+				out_idx++, t1_idx += dt1;
 			}
 
 			if (!counting_shape.dim())
 				break;
 
-			counting_shape[last_long_dim - 1]++;
+			counting_shape[-1]++;
 			for (int d = last_long_dim - 1; d > 0; d--)
-			{
 				if (counting_shape[d] >= _view[d])
 				{
 					counting_shape[d] -= _view[d];
 					counting_shape[d - 1]++;
 				}
-			}
+
 			// If you reach the end of the leading dimension you're done.
 			if (counting_shape[0] >= _view[0])
 				break;
@@ -3953,56 +3920,57 @@ Tensor& Tensor::operator-=(const Tensor& other)
 	// --- Sanity checks ---
 
 	// Both tensors must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to subtract two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(other.is_init(),
+	MACROGRAD_CHECK(other.is_init(),
 		"Trying to subtract two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(is_gpu() == other.is_gpu(),
+	MACROGRAD_CHECK(is_gpu() == other.is_gpu(),
 		"Trying to subtract two tensors in different devices is not allowed."
 	);
-	// Both tensor must have the same dimensionality to avoid ambiguity.
-	TENSOR_CHECK(dim() == other.dim(),
-		"Trying to subtract two tensors with different dimensions.\n"
-		"For broadcast addition please use view() or squeeze()/unsqueeze() to make dimensions match.\n"
-		"Found shapes | Tensor0: %s | Tensor1: %s", _view.str(), other._view.str()
+	// Ten0 must have more or equal the amount of dimensions of other for broadcasting.
+	MACROGRAD_CHECK(dim() >= other.dim(),
+		"Trying to subtract two tensors with incompatible dimensions.\n"
+		"The dimensions of the tensors must match or the second tensor must broadcast to the first one.\n"
+		"Found shapes | This: %s | Other: %s", _view.str(), other._view.str()
 	);
 	// Both tensors must either have the same dimension sizes or one of them have size one.
-	// So that they can be broadcasted or summed without ambiguity.
-	for (unsigned i = 0; i < dim(); i++)
-		TENSOR_CHECK(size(i) == 1 || other.size(i) == 1 || size(i) == other.size(i),
-			"Trying to subtract two tensors with incompatible shapes.\n"
-			"Make sure shapes are compatible, meaning they have the same sizes or one of them is one for broadcasting.\n"
-			"Found shapes | Tensor0: %s | Tensor1: %s", _view.str(), other._view.str()
+	unsigned offset = dim() - other.dim();
+	for (unsigned i = offset; i < dim(); i++)
+		MACROGRAD_CHECK(_view[i] == other._view[i - offset] || other._view[i - offset] == 1 || _view[i] == 1,
+			"Trying to subtract two tensors with incompatible shapes for broadcasting.\n"
+			"Make sure shapes are compatible, meaning they have the same sizes or one of them is unitary.\n"
+			"Found shapes | This: %s | Other: %s", _view.str(), other._view.str()
 		);
 
 	// Extract the data.
-	float* out_data = __data;
-	float* ten_data = __dataof(other);
+	float* out_data = internal_data();
+	const float* ten_data = other.internal_data();
 
 	// Now we actually subtract the tensors.
 	if (is_gpu())
 		kernel_ops::shaped_subtract(out_data, out_data, ten_data, _view, other._view);
 	else
 	{
-		// Sum dimensions on other if necessary.
-		Tensor other_summed = other.no_grad();
-		for (unsigned i = 0; i < other.dim(); i++)
-			if (_view[i] == 1 && other_summed.size(i) != 1)
-				other_summed = other_summed.sum(i, true);
+		// Unsqueeze and sum dimensions on other if necessary.
+		Tensor t1 = other.no_grad();
+		while (dim() > t1.dim()) t1 = t1.unsqueeze(0);
+		for (unsigned i = 0; i < dim(); i++)
+			if (_view[i] == 1 && t1._view[i] != 1)
+				t1 = t1.sum(i, true);
 
-		float* other_summed_data = __dataof(other_summed);
+		// Extract data.
+		const float* t1_data = t1.internal_data();
 
 		// Find the last non-unitary dimension to iterate through.
 		unsigned last_long_dim = 0;
 		for (unsigned i = 0; i < _view.dim(); i++)
 			if (_view[i] > 1)
 				last_long_dim = i;
-		// Find the stride, will be 1 except for ten1 if broadcasting.
-		const unsigned dout = (_view[last_long_dim] != 1) ? 1 : 0;
-		const unsigned dten = (other._view[last_long_dim] != 1) ? 1 : 0;
+		// Find the stride, will be 0 if broadcasting on last dim.
+		const unsigned dt1 = (t1._view[last_long_dim] != 1) ? 1 : 0;
 		// Find the vector length to iterate.
 		const unsigned vector_len = _view[last_long_dim];
 		// Create a running shape to count.
@@ -4010,31 +3978,30 @@ Tensor& Tensor::operator-=(const Tensor& other)
 		// Iterate through vectors.
 		while (true)
 		{
-			unsigned out_idx = 0, ten_idx = 0;
+			unsigned out_idx = 0, t1_idx = 0;
 			for (unsigned d = 0; d < counting_shape.dim(); d++)
 			{
 				if (_view[d] != 1) out_idx += counting_shape[d] * _stride[d];
-				if (other_summed._view[d] != 1) ten_idx += counting_shape[d] * other_summed._stride[d];
+				if (t1._view[d] != 1) t1_idx += counting_shape[d] * t1._stride[d];
 			}
 
 			for (unsigned count = 0u; count < vector_len; count++)
 			{
-				out_data[out_idx] -= other_summed_data[ten_idx];
-				out_idx += dout, ten_idx += dten;
+				out_data[out_idx] -= t1_data[t1_idx];
+				out_idx++, t1_idx += dt1;
 			}
 
 			if (!counting_shape.dim())
 				break;
 
-			counting_shape[last_long_dim - 1]++;
+			counting_shape[-1]++;
 			for (int d = last_long_dim - 1; d > 0; d--)
-			{
 				if (counting_shape[d] >= _view[d])
 				{
 					counting_shape[d] -= _view[d];
 					counting_shape[d - 1]++;
 				}
-			}
+
 			// If you reach the end of the leading dimension you're done.
 			if (counting_shape[0] >= _view[0])
 				break;
@@ -4061,56 +4028,57 @@ Tensor& Tensor::operator*=(const Tensor& other)
 	// --- Sanity checks ---
 
 	// Both tensors must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to multiply two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(other.is_init(),
+	MACROGRAD_CHECK(other.is_init(),
 		"Trying to multiply two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(is_gpu() == other.is_gpu(),
+	MACROGRAD_CHECK(is_gpu() == other.is_gpu(),
 		"Trying to multiply two tensors in different devices is not allowed."
 	);
-	// Both tensor must have the same dimensionality to avoid ambiguity.
-	TENSOR_CHECK(dim() == other.dim(),
-		"Trying to multiply two tensors with different dimensions.\n"
-		"For broadcast addition please use view() or squeeze()/unsqueeze() to make dimensions match.\n"
-		"Found shapes | Tensor0: %s | Tensor1: %s", _view.str(), other._view.str()
+	// Ten0 must have more or equal the amount of dimensions of other for broadcasting.
+	MACROGRAD_CHECK(dim() >= other.dim(),
+		"Trying to multiply two tensors with incompatible dimensions.\n"
+		"The dimensions of the tensors must match or the second tensor must broadcast to the first one.\n"
+		"Found shapes | This: %s | Other: %s", _view.str(), other._view.str()
 	);
 	// Both tensors must either have the same dimension sizes or one of them have size one.
-	// So that they can be broadcasted or summed without ambiguity.
-	for (unsigned i = 0; i < dim(); i++)
-		TENSOR_CHECK(size(i) == 1 || other.size(i) == 1 || size(i) == other.size(i),
-			"Trying to multiply two tensors with incompatible shapes.\n"
-			"Make sure shapes are compatible, meaning they have the same sizes or one of them is one for broadcasting.\n"
-			"Found shapes | Tensor0: %s | Tensor1: %s", _view.str(), other._view.str()
+	unsigned offset = dim() - other.dim();
+	for (unsigned i = offset; i < dim(); i++)
+		MACROGRAD_CHECK(_view[i] == other._view[i - offset] || other._view[i - offset] == 1 || _view[i] == 1,
+			"Trying to multiply two tensors with incompatible shapes for broadcasting.\n"
+			"Make sure shapes are compatible, meaning they have the same sizes or one of them is unitary.\n"
+			"Found shapes | This: %s | Other: %s", _view.str(), other._view.str()
 		);
 
 	// Extract the data.
-	float* out_data = __data;
-	float* ten_data = __dataof(other);
+	float* out_data = internal_data();
+	const float* ten_data = other.internal_data();
 
 	// Now we actually multiply the tensors.
 	if (is_gpu())
 		kernel_ops::shaped_multiply(out_data, out_data, ten_data, _view, other._view);
 	else
 	{
-		// Sum dimensions on other if necessary.
-		Tensor other_summed = other.no_grad();
-		for (unsigned i = 0; i < other.dim(); i++)
-			if (_view[i] == 1 && other_summed.size(i) != 1)
-				other_summed = other_summed.sum(i, true);
+		// Unsqueeze and sum dimensions on other if necessary.
+		Tensor t1 = other.no_grad();
+		while (dim() > t1.dim()) t1 = t1.unsqueeze(0);
+		for (unsigned i = 0; i < dim(); i++)
+			if (_view[i] == 1 && t1._view[i] != 1)
+				t1 = t1.sum(i, true);
 
-		float* other_summed_data = __dataof(other_summed);
+		// Extract data.
+		const float* t1_data = t1.internal_data();
 
 		// Find the last non-unitary dimension to iterate through.
 		unsigned last_long_dim = 0;
 		for (unsigned i = 0; i < _view.dim(); i++)
 			if (_view[i] > 1)
 				last_long_dim = i;
-		// Find the stride, will be 1 except for ten1 if broadcasting.
-		const unsigned dout = (_view[last_long_dim] != 1) ? 1 : 0;
-		const unsigned dten = (other._view[last_long_dim] != 1) ? 1 : 0;
+		// Find the stride, will be 0 if broadcasting on last dim.
+		const unsigned dt1 = (t1._view[last_long_dim] != 1) ? 1 : 0;
 		// Find the vector length to iterate.
 		const unsigned vector_len = _view[last_long_dim];
 		// Create a running shape to count.
@@ -4118,31 +4086,30 @@ Tensor& Tensor::operator*=(const Tensor& other)
 		// Iterate through vectors.
 		while (true)
 		{
-			unsigned out_idx = 0, ten_idx = 0;
+			unsigned out_idx = 0, t1_idx = 0;
 			for (unsigned d = 0; d < counting_shape.dim(); d++)
 			{
 				if (_view[d] != 1) out_idx += counting_shape[d] * _stride[d];
-				if (other_summed._view[d] != 1) ten_idx += counting_shape[d] * other_summed._stride[d];
+				if (t1._view[d] != 1) t1_idx += counting_shape[d] * t1._stride[d];
 			}
 
 			for (unsigned count = 0u; count < vector_len; count++)
 			{
-				out_data[out_idx] *= other_summed_data[ten_idx];
-				out_idx += dout, ten_idx += dten;
+				out_data[out_idx] *= t1_data[t1_idx];
+				out_idx++, t1_idx += dt1;
 			}
 
 			if (!counting_shape.dim())
 				break;
 
-			counting_shape[last_long_dim - 1]++;
+			counting_shape[-1]++;
 			for (int d = last_long_dim - 1; d > 0; d--)
-			{
 				if (counting_shape[d] >= _view[d])
 				{
 					counting_shape[d] -= _view[d];
 					counting_shape[d - 1]++;
 				}
-			}
+
 			// If you reach the end of the leading dimension you're done.
 			if (counting_shape[0] >= _view[0])
 				break;
@@ -4168,57 +4135,58 @@ Tensor& Tensor::operator/=(const Tensor& other)
 
 	// --- Sanity checks ---
 
-// Both tensors must be initialized.
-	TENSOR_CHECK(is_init(),
+	// Both tensors must be initialized.
+	MACROGRAD_CHECK(is_init(),
 		"Trying to divide two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(other.is_init(),
+	MACROGRAD_CHECK(other.is_init(),
 		"Trying to divide two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(is_gpu() == other.is_gpu(),
+	MACROGRAD_CHECK(is_gpu() == other.is_gpu(),
 		"Trying to divide two tensors in different devices is not allowed."
 	);
-	// Both tensor must have the same dimensionality to avoid ambiguity.
-	TENSOR_CHECK(dim() == other.dim(),
-		"Trying to divide two tensors with different dimensions.\n"
-		"For broadcast addition please use view() or squeeze()/unsqueeze() to make dimensions match.\n"
-		"Found shapes | Tensor0: %s | Tensor1: %s", _view.str(), other._view.str()
+	// Ten0 must have more or equal the amount of dimensions of other for broadcasting.
+	MACROGRAD_CHECK(dim() >= other.dim(),
+		"Trying to divide two tensors with incompatible dimensions.\n"
+		"The dimensions of the tensors must match or the second tensor must broadcast to the first one.\n"
+		"Found shapes | This: %s | Other: %s", _view.str(), other._view.str()
 	);
 	// Both tensors must either have the same dimension sizes or one of them have size one.
-	// So that they can be broadcasted or summed without ambiguity.
-	for (unsigned i = 0; i < dim(); i++)
-		TENSOR_CHECK(size(i) == 1 || other.size(i) == 1 || size(i) == other.size(i),
-			"Trying to divide two tensors with incompatible shapes.\n"
-			"Make sure shapes are compatible, meaning they have the same sizes or one of them is one for broadcasting.\n"
-			"Found shapes | Tensor0: %s | Tensor1: %s", _view.str(), other._view.str()
+	unsigned offset = dim() - other.dim();
+	for (unsigned i = offset; i < dim(); i++)
+		MACROGRAD_CHECK(_view[i] == other._view[i - offset] || other._view[i - offset] == 1 || _view[i] == 1,
+			"Trying to divide two tensors with incompatible shapes for broadcasting.\n"
+			"Make sure shapes are compatible, meaning they have the same sizes or one of them is unitary.\n"
+			"Found shapes | This: %s | Other: %s", _view.str(), other._view.str()
 		);
 
 	// Extract the data.
-	float* out_data = __data;
-	float* ten_data = __dataof(other);
+	float* out_data = internal_data();
+	const float* ten_data = other.internal_data();
 
 	// Now we actually divide the tensors.
 	if (is_gpu())
 		kernel_ops::shaped_divide(out_data, out_data, ten_data, _view, other._view);
 	else
 	{
-		// Sum dimensions on other if necessary.
-		Tensor other_summed = other.no_grad();
-		for (unsigned i = 0; i < other.dim(); i++)
-			if (_view[i] == 1 && other_summed.size(i) != 1)
-				other_summed = other_summed.sum(i, true);
+		// Unsqueeze and sum dimensions on other if necessary.
+		Tensor t1 = other.no_grad();
+		while (dim() > t1.dim()) t1 = t1.unsqueeze(0);
+		for (unsigned i = 0; i < dim(); i++)
+			if (_view[i] == 1 && t1._view[i] != 1)
+				t1 = t1.sum(i, true);
 
-		float* other_summed_data = __dataof(other_summed);
+		// Extract data.
+		const float* t1_data = t1.internal_data();
 
 		// Find the last non-unitary dimension to iterate through.
 		unsigned last_long_dim = 0;
 		for (unsigned i = 0; i < _view.dim(); i++)
 			if (_view[i] > 1)
 				last_long_dim = i;
-		// Find the stride, will be 1 except for ten1 if broadcasting.
-		const unsigned dout = (_view[last_long_dim] != 1) ? 1 : 0;
-		const unsigned dten = (other._view[last_long_dim] != 1) ? 1 : 0;
+		// Find the stride, will be 0 if broadcasting on last dim.
+		const unsigned dt1 = (t1._view[last_long_dim] != 1) ? 1 : 0;
 		// Find the vector length to iterate.
 		const unsigned vector_len = _view[last_long_dim];
 		// Create a running shape to count.
@@ -4226,31 +4194,30 @@ Tensor& Tensor::operator/=(const Tensor& other)
 		// Iterate through vectors.
 		while (true)
 		{
-			unsigned out_idx = 0, ten_idx = 0;
+			unsigned out_idx = 0, t1_idx = 0;
 			for (unsigned d = 0; d < counting_shape.dim(); d++)
 			{
 				if (_view[d] != 1) out_idx += counting_shape[d] * _stride[d];
-				if (other_summed._view[d] != 1) ten_idx += counting_shape[d] * other_summed._stride[d];
+				if (t1._view[d] != 1) t1_idx += counting_shape[d] * t1._stride[d];
 			}
 
 			for (unsigned count = 0u; count < vector_len; count++)
 			{
-				out_data[out_idx] /= other_summed_data[ten_idx];
-				out_idx += dout, ten_idx += dten;
+				out_data[out_idx] /= t1_data[t1_idx];
+				out_idx++, t1_idx += dt1;
 			}
 
 			if (!counting_shape.dim())
 				break;
 
-			counting_shape[last_long_dim - 1]++;
+			counting_shape[-1]++;
 			for (int d = last_long_dim - 1; d > 0; d--)
-			{
 				if (counting_shape[d] >= _view[d])
 				{
 					counting_shape[d] -= _view[d];
 					counting_shape[d - 1]++;
 				}
-			}
+
 			// If you reach the end of the leading dimension you're done.
 			if (counting_shape[0] >= _view[0])
 				break;
@@ -4275,23 +4242,22 @@ Tensor& Tensor::operator+=(float val)
 	}
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to add two tensors while the first tensor is empty."
 	);
 
 	// Extract the data.
-	float* out_data = __data;
+	float* out_data = internal_data();
+
+	// Get number of elements.
+	unsigned _numel = numel();
 
 	// Now we actually sum the tensor.
 	if (is_gpu())
-		kernel_ops::add_scalar(out_data, out_data, &val, numel(), false, 1.f);
-	else
-	{
-		// Iterate through all elements.
-		int idx = -1, _numel = int(numel());
-		while (++idx < _numel)
-			out_data[idx] += val;
-	}
+		kernel_ops::add_scalar(out_data, out_data, &val, _numel, false, 1.f);
+
+	else for (unsigned i = 0u; i < _numel; i++)
+		out_data[i] += val;
 
 	// Return self.
 	return *this;
@@ -4314,23 +4280,22 @@ Tensor& Tensor::operator*=(float val)
 	}
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(is_init(),
+	MACROGRAD_CHECK(is_init(),
 		"Trying to multiply by a scalar on an empty tensor."
 	);
 
 	// Extract the data.
-	float* out_data = __data;
+	float* out_data = internal_data();
 
-	// Now we actually multiply the tensors.
+	// Get number of elements.
+	unsigned _numel = numel();
+
+	// Now we actually multiply the tensor.
 	if (is_gpu())
-		kernel_ops::multiply_scalar(out_data, out_data, &val, numel(), false, 1.f);
-	else
-	{
-		// Iterate through all elements.
-		int idx = -1, _numel = int(numel());
-		while (++idx < _numel)
-			out_data[idx] *= val;
-	}
+		kernel_ops::multiply_scalar(out_data, out_data, &val, _numel, false, 1.f);
+
+	else for (unsigned i = 0u; i < _numel; i++)
+		out_data[i] *= val;
 
 	// Return self.
 	return *this;
@@ -4386,21 +4351,21 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, bool transA, b
 	};
 
 	// Both tensor must be initialized.
-	TENSOR_CHECK(mat0.is_init(),
+	MACROGRAD_CHECK(mat0.is_init(),
 		"Trying to matrix multiply two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(mat1.is_init(),
+	MACROGRAD_CHECK(mat1.is_init(),
 		"Trying to matrix multiply two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(mat0.is_gpu() == mat1.is_gpu(),
+	MACROGRAD_CHECK(mat0.is_gpu() == mat1.is_gpu(),
 		"Trying to matrix multiply two tensors in different devices is not allowed."
 	);
-	TENSOR_CHECK(!transA || mat0.dim() > 1,
+	MACROGRAD_CHECK(!transA || mat0.dim() > 1,
 		"Addint a transposition to a single dimensional tensor for a matmul call is not allowed.\n"
 		"Make sure your tensor has at least 2 dimensions if you set 'transA' as true."
 	);
-	TENSOR_CHECK(!transB || mat1.dim() > 1,
+	MACROGRAD_CHECK(!transB || mat1.dim() > 1,
 		"Addint a transposition to a single dimensional tensor for a matmul call is not allowed.\n"
 		"Make sure your tensor has at least 2 dimensions if you set 'transB' as true."
 	);
@@ -4425,7 +4390,7 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, bool transA, b
 		A = A.unsqueeze(0);
 
 	// Make sure dimensions are compatible.
-	TENSOR_CHECK(A._view[transA ? -2 : -1] == B._view[transB ? -1 : -2],
+	MACROGRAD_CHECK(A._view[transA ? -2 : -1] == B._view[transB ? -1 : -2],
 		"Incompatible dimensions found inside a matmul() call.\n"
 		"Please make sure your tensors follow proper matrix multiplication logic (...,M,K) @ (...,K,N) = (...,M,N).\n"
 		"Matrix0 shape: %s | Matrix1 shape: %s", mat0._view.str(), mat1._view.str()
@@ -4433,7 +4398,7 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, bool transA, b
 
 	// Make sure other dimensions are broadcastable.
 	for (unsigned i = 0; i < A.dim() - 2; i++)
-		TENSOR_CHECK(A._view[i] == B._view[i] || A._view[i] == 1 || B._view[i] == 1,
+		MACROGRAD_CHECK(A._view[i] == B._view[i] || A._view[i] == 1 || B._view[i] == 1,
 			"Trying to matrix multiply two tensors with incompatible shapes.\n"
 			"Make sure leading shapes are compatible, meaning they have the same sizes or one of them is unitary for broadcasting.\n"
 			"Found shapes | Unsqueezed Matrix0: %s | Unsqueezed Matrix1: %s", A._view.str(), B._view.str()
@@ -4455,9 +4420,9 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, bool transA, b
 	unsigned K = transA ? A._view[-2] : A._view[-1];
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* A_data = __dataof(A);
-	float* B_data = __dataof(B);
+	float* out_data = out.internal_data();
+	const float* A_data = A.internal_data();
+	const float* B_data = B.internal_data();
 
 	// Now we actually multiply the matrices.
 	if (out.is_gpu())
@@ -4492,8 +4457,8 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, bool transA, b
 			}
 			// Get matrix pointers.
 			float* out_matrix = out_data + out_idx; // M x N values
-			float* A_matrix = A_data + A_idx;		// M x K values
-			float* B_matrix = B_data + B_idx;		// K x N values
+			const float* A_matrix = A_data + A_idx;		// M x K values
+			const float* B_matrix = B_data + B_idx;		// K x N values
 
 			// Here we actually multiply the matrices.
 			{
@@ -4602,24 +4567,24 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& 
 	};
 
 	// Both tensor must be initialized.
-	TENSOR_CHECK(mat0.is_init(),
+	MACROGRAD_CHECK(mat0.is_init(),
 		"Trying to matrix multiply with bias tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(mat1.is_init(),
+	MACROGRAD_CHECK(mat1.is_init(),
 		"Trying to matrix multiply with bias tensors while the second tensor is empty."
 	);
-	TENSOR_CHECK(bias.is_init(),
+	MACROGRAD_CHECK(bias.is_init(),
 		"Trying to matrix multiply with bias tensors while the bias tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(mat0.is_gpu() == mat1.is_gpu() && mat1.is_gpu() == bias.is_gpu(),
+	MACROGRAD_CHECK(mat0.is_gpu() == mat1.is_gpu() && mat1.is_gpu() == bias.is_gpu(),
 		"Trying to matrix multiply with bias tensors in different devices is not allowed."
 	);
-	TENSOR_CHECK(!transA || mat0.dim() > 1,
+	MACROGRAD_CHECK(!transA || mat0.dim() > 1,
 		"Addint a transposition to a single dimensional tensor for a matmul call is not allowed.\n"
 		"Make sure your tensor has at least 2 dimensions if you set 'transA' as true."
 	);
-	TENSOR_CHECK(!transB || mat1.dim() > 1,
+	MACROGRAD_CHECK(!transB || mat1.dim() > 1,
 		"Addint a transposition to a single dimensional tensor for a matmul call is not allowed.\n"
 		"Make sure your tensor has at least 2 dimensions if you set 'transB' as true."
 	);
@@ -4647,7 +4612,7 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& 
 		b = b.unsqueeze(0);
 
 	// Make sure dimensions are compatible.
-	TENSOR_CHECK(A._view[transA ? -2 : -1] == B._view[transB ? -1 : -2],
+	MACROGRAD_CHECK(A._view[transA ? -2 : -1] == B._view[transB ? -1 : -2],
 		"Incompatible dimensions found inside a matmul() call.\n"
 		"Please make sure your tensors follow proper matrix multiplication logic (...,M,K) @ (...,K,N) = (...,M,N).\n"
 		"Matrix0 shape: %s | Matrix1 shape: %s", mat0._view.str(), mat1._view.str()
@@ -4655,7 +4620,7 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& 
 
 	// Make sure other dimensions are broadcastable.
 	for (unsigned i = 0; i < A.dim() - 2; i++)
-		TENSOR_CHECK(A._view[i] == B._view[i] || A._view[i] == 1 || B._view[i] == 1,
+		MACROGRAD_CHECK(A._view[i] == B._view[i] || A._view[i] == 1 || B._view[i] == 1,
 			"Trying to matrix multiply two tensors with incompatible shapes.\n"
 			"Make sure leading shapes are compatible, meaning they have the same sizes or one of them is unitary for broadcasting.\n"
 			"Found shapes | Unsqueezed Matrix0: %s | Unsqueezed Matrix1: %s", A._view.str(), B._view.str()
@@ -4669,13 +4634,13 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& 
 		out_shape[i] = A._view[i] > B._view[i] ? A._view[i] : B._view[i];
 
 	// Make sure bias can be broadcasted to output.
-	TENSOR_CHECK(b.dim() <= out_shape.dim(),
+	MACROGRAD_CHECK(b.dim() <= out_shape.dim(),
 		"Trying to add a bias to a matmul tensor with more dimensions than the matmul output.\n"
 		"Make sure the bias is broadcastable to the matmul output, bias dimensionality must be less or equal.\n"
 		"Found shapes | Matmul output: %s | Bias: %s", out_shape.str(), b._view.str()
 	);
 	for (unsigned i = 0; i < out_shape.dim(); i++)
-		TENSOR_CHECK(out_shape[i] == b._view[i] || b._view[i] == 1,
+		MACROGRAD_CHECK(out_shape[i] == b._view[i] || b._view[i] == 1,
 			"Trying to add a bias to a matmul tensor with incompatible shapes.\n"
 			"Make sure leading shapes are compatible, meaning they have the same sizes or the bias one is unitary for broadcasting.\n"
 			"Found shapes | Matmul output: %s | Unsqueezed bias: %s", out_shape.str(), b._view.str()
@@ -4690,10 +4655,10 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& 
 	unsigned K = transA ? A._view[-2] : A._view[-1];
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* A_data = __dataof(A);
-	float* B_data = __dataof(B);
-	float* b_data = __dataof(b);
+	float* out_data = out.internal_data();
+	const float* A_data = A.internal_data();
+	const float* B_data = B.internal_data();
+	const float* b_data = b.internal_data();
 
 	// Now we actually multiply the matrices.
 	if (out.is_gpu())
@@ -4732,9 +4697,9 @@ Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, const Tensor& 
 			}
 			// Get matrix pointers.
 			float* out_matrix = out_data + out_idx; // M x N values
-			float* A_matrix = A_data + A_idx;		// M x K values
-			float* B_matrix = B_data + B_idx;		// K x N values
-			float* b_matrix = b_data + b_idx;		// M? x N? values
+			const float* A_matrix = A_data + A_idx;		// M x K values
+			const float* B_matrix = B_data + B_idx;		// K x N values
+			const float* b_matrix = b_data + b_idx;		// M? x N? values
 
 			// Here we actually multiply the matrices.
 			{
@@ -4845,18 +4810,18 @@ Tensor Functional::cat(const Tensor& ten0, const Tensor& ten1, int dim)
 	// --- Sanity checks ---
 
 	// Both tensor must be initialized.
-	TENSOR_CHECK(ten0.is_init(),
+	MACROGRAD_CHECK(ten0.is_init(),
 		"Trying to concatenate two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(ten1.is_init(),
+	MACROGRAD_CHECK(ten1.is_init(),
 		"Trying to concatenate two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(ten0.is_gpu() == ten1.is_gpu(),
+	MACROGRAD_CHECK(ten0.is_gpu() == ten1.is_gpu(),
 		"Trying to concatenate two tensors in different devices is not allowed."
 	);
 	// Both tensor must have the same dimensionality to avoid ambiguity.
-	TENSOR_CHECK(ten0.dim() == ten1.dim(),
+	MACROGRAD_CHECK(ten0.dim() == ten1.dim(),
 		"Trying to concatenate two tensors with different dimensions.\n"
 		"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
 	);
@@ -4865,7 +4830,7 @@ Tensor Functional::cat(const Tensor& ten0, const Tensor& ten1, int dim)
 	dim = unsigned(dim + ten0.dim() * (2 - dim / int(ten0.dim()))) % ten0.dim();
 	// Both tensors must have the same dimension sizes except at dim.
 	for (unsigned i = 0; i < ten0.dim(); i++)
-		TENSOR_CHECK(i == dim || ten0.size(i) == ten1.size(i),
+		MACROGRAD_CHECK(i == dim || ten0.size(i) == ten1.size(i),
 			"Trying to concatenate two tensors with incompatible shapes.\n"
 			"Make sure they have the same sizes in all dimensions except the concatenated one.\n"
 			"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
@@ -4886,9 +4851,9 @@ Tensor Functional::cat(const Tensor& ten0, const Tensor& ten1, int dim)
 	Tensor out(out_shape, ten0.device(), requires_grad);
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* ten0_data = __dataof(ten0);
-	float* ten1_data = __dataof(ten1);
+	float* out_data = out.internal_data();
+	const float* ten0_data = ten0.internal_data();
+	const float* ten1_data = ten1.internal_data();
 	// Get outer stride.
 	const unsigned outer_stride_out = out._stride[dim] * out_shape[dim];
 	const unsigned outer_stride_in0 = out._stride[dim] * _size0;
@@ -4957,7 +4922,7 @@ Tensor Functional::mean_squared_error(const Tensor& ten0, const Tensor& ten1)
 		void _backward() override
 		{
 			Tensor derivative = y0.no_grad() - y1.no_grad();
-			derivative.internal_multiply(__dataof(out.gradient()), out.is_gpu(), 2.f / count);
+			derivative.internal_multiply(out.gradient().internal_data(), out.is_gpu(), 2.f / count);
 
 			if (y0.has_grad()) y0.internal_gradient() += derivative;
 			if (y1.has_grad()) y1.internal_gradient() -= derivative;
@@ -4967,18 +4932,18 @@ Tensor Functional::mean_squared_error(const Tensor& ten0, const Tensor& ten1)
 	// --- Sanity checks ---
 
 	// Both tensor must be initialized.
-	TENSOR_CHECK(ten0.is_init(),
+	MACROGRAD_CHECK(ten0.is_init(),
 		"Trying to compute MSE of two tensors while the first tensor is empty."
 	);
-	TENSOR_CHECK(ten1.is_init(),
+	MACROGRAD_CHECK(ten1.is_init(),
 		"Trying to compute MSE of two tensors while the second tensor is empty."
 	);
 	// Both tensors must be on the same device
-	TENSOR_CHECK(ten0.is_gpu() == ten1.is_gpu(),
+	MACROGRAD_CHECK(ten0.is_gpu() == ten1.is_gpu(),
 		"Trying to compute MSE of two tensors in different devices is not allowed."
 	);
 	// Both tensor must have the same number of elements.
-	TENSOR_CHECK(ten0.numel() == ten1.numel(),
+	MACROGRAD_CHECK(ten0.numel() == ten1.numel(),
 		"Trying to compute MSE of two tensors with different nomber of elements.\n"
 		"Found shapes | Tensor0: %s | Tensor1: %s", ten0._view.str(), ten1._view.str()
 	);
@@ -4992,7 +4957,7 @@ Tensor Functional::mean_squared_error(const Tensor& ten0, const Tensor& ten1)
 
 	// Get size.
 	int size = y0.numel();
-	TENSOR_CHECK(size,
+	MACROGRAD_CHECK(size,
 		"Trying to compute MSE of two tensors of zero elements is not allowed."
 	);
 
@@ -5000,9 +4965,9 @@ Tensor Functional::mean_squared_error(const Tensor& ten0, const Tensor& ten1)
 	Tensor out(Shape(1), ten0.device(), requires_grad);
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* y0_data = __dataof(y0);
-	float* y1_data = __dataof(y1);
+	float* out_data = out.internal_data();
+	float* y0_data = y0.internal_data();
+	float* y1_data = y1.internal_data();
 
 	// Now we actually compute the MSE.
 	if (out.is_gpu())
@@ -5053,37 +5018,37 @@ Tensor Functional::cross_entropy_loss(const Tensor& logits, const VectorInt& lab
 		void _backward() override
 		{
 			Tensor derivative = probs - labels;
-			derivative.internal_multiply(__dataof(out.gradient()), out.is_gpu(), 1.f / size);
+			derivative.internal_multiply(out.gradient().internal_data(), out.is_gpu(), 1.f / size);
 
 			logits.internal_gradient() += derivative;
 		}
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(logits.is_init(),
+	MACROGRAD_CHECK(logits.is_init(),
 		"Trying to apply softmax to an empty tensor."
 	);
 	// Make sure shape is correct.
-	TENSOR_CHECK(logits.dim() == 2,
+	MACROGRAD_CHECK(logits.dim() == 2,
 		"Invalid shape found in logits for cross-entropy loss.\n"
 		"Make sure your logits have shape (n_cases, n_classes) to avoid any ambiguity.\n"
 		"Logits shape found: %s", logits._view.str()
 	);
-	TENSOR_CHECK(logits._view[-1] > 1,
+	MACROGRAD_CHECK(logits._view[-1] > 1,
 		"Invalid shape found in logits for cross-entropy loss.\n"
 		"Make sure your logits have shape (n_cases, n_classes).\n" 
 		"Found only one class, this makes the operation a no-op and is most likely unintentional.\n"
 		"Logits shape found: %s", logits._view.str()
 	);
-	TENSOR_CHECK(logits._view[0] != 0,
+	MACROGRAD_CHECK(logits._view[0] != 0,
 		"Found zero number of cases for cross-entropy loss.\n"
 		"There must be at least one case, void tensors are not allowed.\n"
 		"Logits shape found: %s", logits._view.str()
 	);
-	TENSOR_CHECK(labels.is_gpu() == logits.is_gpu(),
+	MACROGRAD_CHECK(labels.is_gpu() == logits.is_gpu(),
 		"Logits and labels found in different devices inside a cross-entropy loss call."
 	);
-	TENSOR_CHECK((int)labels.len() >= logits._view[0],
+	MACROGRAD_CHECK((int)labels.len() >= logits._view[0],
 		"Insuficient amount of labels found inside a cross-entropy loss call.\n"
 		"Make sure the length of the labels vector is at least the amount of cases.\n"
 		"Logits shape found: %s | Labels count: %u", logits._view.str(), labels.len()
@@ -5099,9 +5064,9 @@ Tensor Functional::cross_entropy_loss(const Tensor& logits, const VectorInt& lab
 	unsigned size = logits._view[0];
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* probs_data = __dataof(probs);
-	float* logits_data = __dataof(logits);
+	float* out_data = out.internal_data();
+	float* probs_data = probs.internal_data();
+	const float* logits_data = logits.internal_data();
 	const int* labels_data = labels.data();
 
 	// Get relevant stride.
@@ -5119,9 +5084,9 @@ Tensor Functional::cross_entropy_loss(const Tensor& logits, const VectorInt& lab
 			int label = labels_data[i];
 
 			float* p_probs = probs_data + i * num_classes;
-			float* p_logits = logits_data + i * num_classes;
+			const float* p_logits = logits_data + i * num_classes;
 			
-			TENSOR_CHECK(label < (int)num_classes && label >= 0,
+			MACROGRAD_CHECK(label < (int)num_classes && label >= 0,
 				"Label out of range found inside cross-entropy loss computation.\n"
 				"Make sure your labels are in the range [0, num_classes - 1]."
 			);
@@ -5180,37 +5145,37 @@ Tensor Functional::negative_log_likelihood(const Tensor& probs, const VectorInt&
 		void _backward() override
 		{
 			Tensor derivative = labels / probs.no_grad();
-			derivative.internal_multiply(__dataof(out.gradient()), out.is_gpu(), 1.f / size);
+			derivative.internal_multiply(out.gradient().internal_data(), out.is_gpu(), 1.f / size);
 
 			probs.internal_gradient() -= derivative;
 		}
 	};
 
 	// Tensor must be initialized.
-	TENSOR_CHECK(probs.is_init(),
+	MACROGRAD_CHECK(probs.is_init(),
 		"Trying to compute NLL with an empty tensor."
 	);
 	// Make sure shape is correct.
-	TENSOR_CHECK(probs.dim() == 2,
+	MACROGRAD_CHECK(probs.dim() == 2,
 		"Invalid shape found in probabilities for negative log likelihood.\n"
 		"Make sure your probs have shape (n_cases, n_classes) to avoid any ambiguity.\n"
 		"Probs shape found: %s", probs._view.str()
 	);
-	TENSOR_CHECK(probs._view[-1] > 1,
+	MACROGRAD_CHECK(probs._view[-1] > 1,
 		"Invalid shape found in probabilities for negative log likelihood.\n"
 		"Make sure your probs have shape (n_cases, n_classes).\n"
 		"Found only one class, this makes the operation a no-op and is most likely unintentional.\n"
 		"Probs shape found: %s", probs._view.str()
 	);
-	TENSOR_CHECK(probs._view[0] != 0,
+	MACROGRAD_CHECK(probs._view[0] != 0,
 		"Found zero number of cases for negative log likelihood.\n"
 		"There must be at least one case, void tensors are not allowed.\n"
 		"Probs shape found: %s", probs._view.str()
 	);
-	TENSOR_CHECK(labels.is_gpu() == probs.is_gpu(),
+	MACROGRAD_CHECK(labels.is_gpu() == probs.is_gpu(),
 		"Probabilities and labels found in different devices inside a negative log likelihood call."
 	);
-	TENSOR_CHECK((int)labels.len() >= probs._view[0],
+	MACROGRAD_CHECK((int)labels.len() >= probs._view[0],
 		"Insuficient amount of labels found inside a negative log likelihood call.\n"
 		"Make sure the length of the labels vector is at least the amount of cases.\n"
 		"Probs shape found: %s | Labels count: %u", probs._view.str(), labels.len()
@@ -5223,8 +5188,8 @@ Tensor Functional::negative_log_likelihood(const Tensor& probs, const VectorInt&
 	unsigned size = probs._view[0];
 
 	// Extract the data.
-	float* out_data = __dataof(out);
-	float* probs_data = __dataof(probs);
+	float* out_data = out.internal_data();
+	const float* probs_data = probs.internal_data();
 	const int* labels_data = labels.data();
 
 	// Get relevant stride.
@@ -5241,7 +5206,7 @@ Tensor Functional::negative_log_likelihood(const Tensor& probs, const VectorInt&
 			// Get the label.
 			int label = labels_data[i];
 
-			TENSOR_CHECK(label < (int)num_classes && label >= 0,
+			MACROGRAD_CHECK(label < (int)num_classes && label >= 0,
 				"Label out of range found inside negative log likelihood computation.\n"
 				"Make sure your labels are in the range [0, num_classes - 1]."
 			);
@@ -5263,11 +5228,11 @@ Tensor Functional::negative_log_likelihood(const Tensor& probs, const VectorInt&
 Tensor Functional::one_hot(const VectorInt& labels, unsigned num_classes)
 {
 	// Size must be correct.
-	TENSOR_CHECK(num_classes > 1,
+	MACROGRAD_CHECK(num_classes > 1,
 		"Invalid number of classes found in one-hot encoding. Found num_classes less than two.\n"
 		"This makes the operation a no-op and is most likely unintentional.\n"
 	);
-	TENSOR_CHECK(labels.len(),
+	MACROGRAD_CHECK(labels.len(),
 		"Uninitialized label vector can not be used to generate a one-hot encoding.\n"
 		"Please make sure your labels vector has at least one case.\n"
 	);
@@ -5295,7 +5260,7 @@ Tensor Functional::one_hot(const VectorInt& labels, unsigned num_classes)
 			// Get the label.
 			int label = labels_data[i];
 
-			TENSOR_CHECK(label < (int)num_classes && label >= 0,
+			MACROGRAD_CHECK(label < (int)num_classes && label >= 0,
 				"Label out of range found inside a one-hot encoding.\n"
 				"Make sure your labels are in the range [0, num_classes - 1]."
 			);
@@ -5427,7 +5392,7 @@ int Random::rand_int(int min, int max)
 
 void Initialization::normal(Tensor& tensor, float mean, float std)
 {
-	TENSOR_CHECK(tensor.is_init(),
+	MACROGRAD_CHECK(tensor.is_init(),
 		"Found an empty tensor inside unifor initialization, please make sure your tensor is initialized."
 	);
 
@@ -5446,7 +5411,7 @@ void Initialization::normal(Tensor& tensor, float mean, float std)
 
 void Initialization::uniform(Tensor& tensor, float min, float max)
 {
-	TENSOR_CHECK(tensor.is_init(),
+	MACROGRAD_CHECK(tensor.is_init(),
 		"Found an empty tensor inside unifor initialization, please make sure your tensor is initialized."
 	);
 

@@ -179,7 +179,7 @@ void VectorInt::reduce_instance_count()
 
 VectorInt::VectorInt(unsigned length, const char* device)
 {
-	TENSOR_CHECK(length,
+	MACROGRAD_CHECK(length,
 		"To initialize an empty VectorInt please use the default constructor."
 	);
 
@@ -202,7 +202,9 @@ VectorInt::VectorInt(unsigned length, const char* device)
 		_internals->_is_gpu = true;
 		_internals->_data = MemPool::allocate(length * sizeof(int));
 	}
-	else TENSOR_ERROR(
+	else 
+		
+		(
 		"Unknown device string found \"%s\".\n"
 		"Supported devices are \"cpu\" and \"cuda\".",
 		device
@@ -211,12 +213,12 @@ VectorInt::VectorInt(unsigned length, const char* device)
 
 VectorInt::VectorInt(int a, int b, int stride, const char* device)
 {
-	TENSOR_CHECK((b - a > 0 && stride > 0) || (b - a < 0 && stride < 0),
+	MACROGRAD_CHECK((b - a > 0 && stride > 0) || (b - a < 0 && stride < 0),
 		"To generate an aranged VectorInt the direction a -> b must match the stride sign.\n"
 		"Found values | a: %i | b: %i | stride: %i", a, b, stride
 	);
 
-	TENSOR_CHECK((b - a) % stride == 0,
+	MACROGRAD_CHECK((b - a) % stride == 0,
 		"Invalid values found for an aranged VectorInt initialization, stride must divide 'b - a'.\n"
 		"Found values | a: %i | b: %i | stride: %i", a, b, stride
 	);
@@ -247,13 +249,13 @@ VectorInt& VectorInt::operator=(const VectorInt& other)
 
 VectorInt VectorInt::operator[](const VectorInt& idxs) const
 {
-	TENSOR_CHECK(idxs.len(),
+	MACROGRAD_CHECK(idxs.len(),
 		"Trying to use VectorInt::operator[] with empty indices is not allowed."
 	);
-	TENSOR_CHECK(len(),
+	MACROGRAD_CHECK(len(),
 		"Trying to use operator[] on an empty VectorInt is not allowed."
 	);
-	TENSOR_CHECK(idxs.is_gpu() == is_gpu(),
+	MACROGRAD_CHECK(idxs.is_gpu() == is_gpu(),
 		"Trying to call operator[] with indices and VectorInt in different devices."
 	);
 
@@ -276,7 +278,7 @@ VectorInt VectorInt::operator[](const VectorInt& idxs) const
 		for (unsigned i = 0; i < length; i++)
 		{
 			int idx = idxs_data[i];
-			TENSOR_CHECK(idx >= 0 && (unsigned)idx < size0,
+			MACROGRAD_CHECK(idx >= 0 && (unsigned)idx < size0,
 				"Idx out of bounds find during an operator [] call.\n"
 				"Make sure your indices are in the range [0, len() - 1]. Idx found: %i", idx
 			);
@@ -290,10 +292,10 @@ VectorInt VectorInt::operator[](const VectorInt& idxs) const
 
 int& VectorInt::operator[](int i)
 {
-	TENSOR_CHECK(_internals,
+	MACROGRAD_CHECK(_internals,
 		"Operator [] on an empty VectorInt is not allowed"
 	);
-	TENSOR_CHECK(!_internals->_is_gpu,
+	MACROGRAD_CHECK(!_internals->_is_gpu,
 		"Operator [] on a GPU VectorInt is not allowed"
 	);
 
@@ -303,10 +305,10 @@ int& VectorInt::operator[](int i)
 
 const int& VectorInt::operator[](int i) const
 {
-	TENSOR_CHECK(_internals,
+	MACROGRAD_CHECK(_internals,
 		"Operator [] on an empty VectorInt is not allowed"
 	);
-	TENSOR_CHECK(!_internals->_is_gpu,
+	MACROGRAD_CHECK(!_internals->_is_gpu,
 		"Operator [] on a GPU VectorInt is not allowed"
 	);
 
@@ -316,7 +318,7 @@ const int& VectorInt::operator[](int i) const
 
 int VectorInt::get(int i) const
 {
-	TENSOR_CHECK(_internals,
+	MACROGRAD_CHECK(_internals,
 		"Get function on an empty VectorInt is not allowed"
 	);
 
@@ -330,7 +332,7 @@ int VectorInt::get(int i) const
 
 void VectorInt::set(int i, int val)
 {
-	TENSOR_CHECK(_internals,
+	MACROGRAD_CHECK(_internals,
 		"Set function on an empty VectorInt is not allowed"
 	);
 
@@ -342,14 +344,14 @@ void VectorInt::set(int i, int val)
 
 void VectorInt::set(int a, int b, int* values)
 {
-	TENSOR_CHECK(_internals,
+	MACROGRAD_CHECK(_internals,
 		"Set function on an empty VectorInt is not allowed"
 	);
 
 	int idx_a = mod(a, (int)_length);
 	int idx_b = mod(b - 1, (int)_length) + 1;
 
-	TENSOR_CHECK(idx_b >= idx_a,
+	MACROGRAD_CHECK(idx_b >= idx_a,
 		"Trying to set a list of values on a VectorInt while the indices provided are reversed.\n"
 		"Modulo index 'a': %i | Modulo index 'b': %i", idx_a, idx_b
 	);
@@ -365,7 +367,7 @@ void VectorInt::set(int a, int b, int* values)
 
 VectorInt VectorInt::to(const char* device) const
 {
-	TENSOR_CHECK(_internals,
+	MACROGRAD_CHECK(_internals,
 		"'to()' function on an empty VectorInt is not allowed"
 	);
 
@@ -391,14 +393,14 @@ VectorInt VectorInt::to(const char* device) const
 
 VectorInt VectorInt::subset(int a, int b) const
 {
-	TENSOR_CHECK(_internals,
+	MACROGRAD_CHECK(_internals,
 		"Subset function on an empty VectorInt is not allowed"
 	);
 
 	int idx_a = mod(a, (int)_length);
 	int idx_b = mod(b - 1, (int)_length) + 1;
 
-	TENSOR_CHECK(idx_b >= idx_a,
+	MACROGRAD_CHECK(idx_b >= idx_a,
 		"Trying to get a subset of a VectorInt while the indices provided are reversed.\n"
 		"Modulo index 'a': %i | Modulo index 'b': %i", idx_a, idx_b
 	);
@@ -466,7 +468,7 @@ const char* VectorInt::str(const char* fmt) const
 
 /*
 --------------------------------------------------------------------------------------------------------------------------
- Constructor / Destructor
+ Constructor Functions
 --------------------------------------------------------------------------------------------------------------------------
 */
 
@@ -485,11 +487,11 @@ Tensor::Tensor(const Tensor& other)
 
 Tensor::Tensor(const Shape& shape, const char* device, bool requires_grad)
 {
-	TENSOR_CHECK(shape.dim(),
+	MACROGRAD_CHECK(shape.dim(),
 		"If the tensor created will have zero dimensions please use the default constructor."
 	);
 	for (unsigned i = 0; i < shape.dim(); i++)
-		TENSOR_CHECK(shape[i] >= 0,
+		MACROGRAD_CHECK(shape[i] >= 0,
 			"A shape with negative values is not allowed for initialization."
 		);
 
@@ -529,7 +531,7 @@ Tensor::Tensor(const Shape& shape, const char* device, bool requires_grad)
 		// Allocate clean data.
 		_internals->_data = MemPool::allocate(_internals->_data_size);
 	}
-	else TENSOR_ERROR(
+	else MACROGRAD_ERROR(
 		"Unknown device string found \"%s\".\n"
 		"Supported devices are \"cpu\" and \"cuda\".",
 		device
@@ -537,13 +539,6 @@ Tensor::Tensor(const Shape& shape, const char* device, bool requires_grad)
 
 	if (requires_grad)
 		_internals->gradient = new Tensor(shape, device, false);
-}
-
-// Reduces the instance count by one.
-
-Tensor::~Tensor()
-{
-	reduce_instances_count();
 }
 
 /*
@@ -554,10 +549,10 @@ Tensor::~Tensor()
 
 float Tensor::item() const
 {
-	TENSOR_CHECK(_internals,
+	MACROGRAD_CHECK(_internals,
 		"Trying to call item on an empty tensor is not allowed."
 	);
-	TENSOR_CHECK(numel() == 1,
+	MACROGRAD_CHECK(numel() == 1,
 		"Trying to call item on a tensor with %s elements.\n"
 		"Item can only be called on single element tensors.", numel()
 	);
@@ -573,7 +568,7 @@ float Tensor::item() const
 
 const char* Tensor::str() const
 {
-	TENSOR_CHECK(_internals,
+	MACROGRAD_CHECK(_internals,
 		"Trying to get the string of an empty tensor is not allowed"
 	);
 
@@ -704,7 +699,7 @@ const char* Tensor::array_str(const char* fmt) const
 
 const char* Tensor::device() const
 {
-	TENSOR_CHECK(_internals,
+	MACROGRAD_CHECK(_internals,
 		"Trying to get the device on an empty tensor is not allowed."
 	);
 
@@ -712,23 +707,18 @@ const char* Tensor::device() const
 	return _internals->device;
 }
 
-bool Tensor::has_grad() const
-{
-	return _internals && !_is_no_grad && _internals->gradient != nullptr;
-}
-
 void Tensor::backward()
 {
 	// Sanity checks.
-	TENSOR_CHECK(_internals,
+	MACROGRAD_CHECK(_internals,
 		"Trying to call backwards on an empty tensor."
 	);
-	TENSOR_CHECK(has_grad(),
+	MACROGRAD_CHECK(has_grad(),
 		"Trying to call backward on a tensor with no gradient. This would be a no-op.\n"
 		"Please make sure all the relevant tensors in your network have gradient."
 	);
 	for (unsigned i = 0; i < dim(); i++)
-		TENSOR_CHECK(size(i) == 1u,
+		MACROGRAD_CHECK(size(i) == 1u,
 			"Calling backpropagation on a tensor with invalid shape.\n"
 			"Backward() may only be called on single element tensors.\n"
 			"Found shape: %s.", shape().str()
@@ -748,7 +738,7 @@ void Tensor::backward()
 	// Backprop and reset list.
 	for (unsigned i = 0; i < count; i++)
 	{
-		list[i]->_internals->added_to_backward = false;
+		list[i]->_internals->already_added = false;
 		list[i]->_internals->op->_backward();
 	}
 
@@ -829,7 +819,7 @@ Tensor Tensor::to(const char* device, bool with_grad) const
 const Tensor& Tensor::gradient() const
 {
 	// Sanity checks.
-	TENSOR_CHECK(has_grad(),
+	MACROGRAD_CHECK(has_grad(),
 		"Trying to get the gradient on an tensor with no gradient is not allowed."
 	);
 
@@ -896,13 +886,13 @@ void Tensor::reduce_instances_count()
 	}
 }
 
-// Function that to add itself and its relatives to the backward pass.
+// Function to add itself and its relatives to the backward pass.
 
 void Tensor::add_to_backward_list(Tensor*** p_list, unsigned* count)
 {
 	// Only add to the list if the tensor
 	// can backpropagate, this ensures grad too.
-	if (!_internals->op || _internals->added_to_backward)
+	if (!_internals->op || _internals->already_added)
 		return;
 
 	// Add relatives to the list first.
@@ -919,5 +909,5 @@ void Tensor::add_to_backward_list(Tensor*** p_list, unsigned* count)
 		delete[] *p_list;
 	*p_list = new_list;
 	(*count)++;
-	_internals->added_to_backward = true;
+	_internals->already_added = true;
 }
