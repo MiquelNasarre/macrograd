@@ -357,7 +357,7 @@ private:
 	Shape _view = {};	// Tensor view shape, it is the one considered for operations and unique to each instance.
 	Shape _stride = {}; // Strides according to the view. All tensors are contiguous, so they only depend on the view.
 
-	bool _is_no_grad = false; // Whether the tensor says it has grad or not (no_grad() method).
+	bool _requires_grad = false; // Whether the tensor says it has grad or not (no_grad()/with_grad() methods).
 
 	// Holds all the internal data of a tensor, shared across instances.
 	struct TensorInternals
@@ -435,16 +435,16 @@ public:
 	// Used to interact with the gradient. Including zero_grad and backward.
 	
 	// Returns whether the tensor has a gradient and is flagged as such.
-	bool has_grad() const { return !_is_no_grad && _internals && _internals->gradient; }
-
-	// If the tensor has gradient it sets all the gradient values to zero.
-	void zero_grad();
+	bool has_grad() const { return _requires_grad; }
 
 	// Returns the internal tensor operation string if exists, else "None".
-	const char* get_operator() const;
+	const char* get_operator() const { return (_internals && _internals->op) ? _internals->op->_type : "None"; }
 
 	// If it has gradient, returns a constant reference to the gradient tensor.
 	const Tensor& gradient() const;
+
+	// If the tensor has gradient it sets all the gradient values to zero.
+	void zero_grad();
 
 	// The backward pass can only be called on single element tensors that have gradient. 
 	// It first sets its gradient to one, then generates the topological graph of the 
@@ -474,14 +474,17 @@ public:
 	// Returns whether the tensor data is stored on CUDA.
 	bool is_gpu()			const { return is_init() && _internals->is_gpu; }
 
+	// Returns the number of instances pointing to its internal data.
+	unsigned instances()	const { return is_init() ? _internals->instances : 0; }
+
 	// Returns the total byte size of the tensor data.
-	unsigned byte_size()	const { return is_init() ? _internals->_data_size : 0; } 
+	unsigned data_size()	const { return is_init() ? _internals->_data_size : 0; } 
 
 	// Returns the total number of elements of the tensor.
 	unsigned numel()		const { return is_init() ? _internals->_numel : 0; } 
 
-	// If the tensor is initialized it returns the device string.
-	const char* device() const;
+	// If the tensor is initialized it returns the device string. Else "none".
+	const char* device()	const { return _internals ? _internals->device : "none"; }
 
 	// If the tensor has a single element it returns the value of that element.
 	// If the tensor is on CUDA this will force a synchronization.
@@ -569,6 +572,10 @@ public:
 	// to do operations without using gradient with tensors that do have gradient stored.
 	Tensor no_grad() const;
 
+	// Returns a tensor with the same data marked as having gradient, this enables the tensor
+	// to participate in backpropatation, opposite to what no_grad() does.
+	Tensor with_grad() const;
+
 	// Equality operator. Takes the same data pointer as the other tensor and increases the 
 	// instances by one. If it was initialized it reduces the instances count on the old data.
 	Tensor& operator=(const Tensor& other);
@@ -621,100 +628,224 @@ public:
 	Tensor operator[](int i) const { return subset({1}, {i}).squeeze(0); }	
 
 	// --- Element/Row-wise Functions ---
-	// The following functions are all operators that return an operation on only their data,
-	// these being element-wise operations like ReLU or row-wise operators like mean. All of
-	// them allow for backpropagation except for argmax, argmin and sign.
+	// The following functions are methods that operate only on their own data. These 
+	// include element-wise operations like ReLU and row-wise operations like mean. All 
+	// of them allow for backpropagation, except for argmax, argmin and sign.
 
+	// Element-wise sign. Preserves shape.
+	// Does not have gradient.
 	Tensor sign() const;
+
+	// Element-wise exponential. Preserves shape.
+	// Grad: in.grad += out.grad * out.
 	Tensor exp() const;
+
+	// Element-wise logarithm. Preserves shape.
+	// Grad: in.grad += out.grad / in.
 	Tensor log() const;
+
+	// Element-wise ReLU. Preserves shape.
+	// Grad: in.grad += out.grad * (in > 0).
 	Tensor relu() const;
+
+	// Element-wise SiLU. Preserves shape.
+	// Grad: in.grad += out.grad * (out + sigmoid(in) * (1 - out)).
 	Tensor silu() const;
+
+	// Element-wise GELU. Preserves shape.
+	// Grad: in.grad += out.grad * (Phi(in) + in * phi(in)).
 	Tensor gelu() const;
+
+	// Element-wise sigmoid. Preserves shape.
+	// Grad: in.grad += out.grad * out * (1 - out).
 	Tensor sigmoid() const;
+
+	// Element-wise hyperbolic tangent. Preserves shape.
+	// Grad: in.grad += out.grad * (1 - out^2).
 	Tensor tanh() const;
+
+	// Element-wise square root. Preserves shape.
+	// Grad: in.grad += out.grad / (2 * out).
 	Tensor sqrt() const;
+
+	// Element-wise squaring. Preserves shape.
+	// Grad: in.grad += out.grad * 2 * in.
 	Tensor square() const;
+
+	// Element-wise power function. Preserves shape.
+	// Grad: in.grad += out.grad * exp * out / in.
 	Tensor pow(float exp) const;
+
+	// Dimension-wise summation. Reduces given dimension.
+	// Grad: in.grad += out.grad (broadcast).
 	Tensor sum(int dim, bool keepdim = false) const;
+
+	// Dimension-wise averaging. Reduces given dimension.
+	// Grad: in.grad += out.grad / N (broadcast).
 	Tensor mean(int dim, bool keepdim = false) const;
+
+	// Dimension-wise variance. Reduces given dimension.
+	// Grad: in.grad += 2 / N * (in - mean) * out.grad (broadcast). 
 	Tensor var(int dim, bool keepdim = false) const;
+
+	// Dimension-wise standard deviation. Reduces given dimension.
+	// Grad: in.grad += (in - mean) / (N * std) * out.grad (broadcast).
 	Tensor std(int dim, bool keepdim = false) const;
+
+	// Dimension-wise softmax. Preserves shape.
+	// Grad: in_i.grad += out_i * (grad_i - sum(outs * outs.grad)).
 	Tensor softmax(int dim) const;
 
+	// Dimension-wise maximum. Reduces given dimension.
+	// Grad: in.grad += (one_hot max) * out.grad (routed).
 	Tensor max(int dim, bool keepdim = false) const;
+
+	// Dimension-wise minimum. Reduces given dimension.
+	// Grad: in.grad += (one_hot min) * out.grad (routed).
 	Tensor min(int dim, bool keepdim = false) const;
+
+	// Returns a vector containing the dimension-wise maximum indices.
+	// Only accepts 2/1-dimensional tensors. For classification. 
 	VectorInt argmax(bool last_dim = true) const;
+
+	// Returns a vector containing the dimension-wise minimum indices.
+	// Only accepts 2/1-dimensional tensors. For classification.
 	VectorInt argmin(bool last_dim = true) const;
 
-	// --- Regular operators ---
+	// --- Standard operators ---
+	// Standard operators in this library follow an unconventional broadcasting logic.
+	// The output shape always matches the first tensor's shape while the second tensor
+	// is broadcast or reduced as needed to accommodate. This allows reusing the same 
+	// logic in both the forward pass and backpropagation, but makes the operators
+	// non-commutative. Here are some examples:
+	// - (12, 8) + (1, 8) = (12, 8) (broadcast).
+	// - (1, 16) + (4, 16) = (1, 16) (sum reduction).
+	// - (4, 16, 1) + (16, 6) = (4, 16, 1) (unsqueeze, broadcast dim 0, reduce dim -1).
 
+	// Element-wise addition. Preserves first tensor's shape.
+	// Grad: ten0.grad += out.grad, ten1.grad += out.grad.
 	friend Tensor operator+(const Tensor& ten0, const Tensor& ten1);
+
+	// Element-wise subtraction. Preserves first tensor's shape.
+	// Grad: ten0.grad += out.grad, ten1.grad -= out.grad.
 	friend Tensor operator-(const Tensor& ten0, const Tensor& ten1);
+
+	// Element-wise multiplication. Preserves first tensor's shape.
+	// Grad: ten0.grad += out.grad * ten1, ten1.grad += out.grad * ten0.
 	friend Tensor operator*(const Tensor& ten0, const Tensor& ten1);
+
+	// Element-wise division. Preserves first tensor's shape.
+	// Grad: num.grad += out.grad / den, den.grad -= out.grad * (out / den).
 	friend Tensor operator/(const Tensor& ten0, const Tensor& ten1);
 
+	// Element-wise scalar addition. Preserves shape.
+	// Grad: ten.grad += out.grad (unchanged).
 	friend Tensor operator+(const Tensor& ten, float val);
+
+	// Element-wise scalar subtraction. Preserves shape.
+	// Grad: ten.grad += out.grad (unchanged).
 	friend Tensor operator-(const Tensor& ten, float val);
+
+	// Element-wise scalar multiplication. Preserves shape.
+	// Grad: ten.grad += val * out.grad (scaled).
 	friend Tensor operator*(const Tensor& ten, float val);
+
+	// Element-wise division by scalar. Preserves shape.
+	// Grad: ten.grad += out.grad / val (scaled).
 	friend Tensor operator/(const Tensor& ten, float val);
 
+	// Element-wise scalar addition. Preserves shape.
+	// Grad: ten.grad += out.grad (unchanged).
 	friend Tensor operator+(float val, const Tensor& ten);
+
+	// Element-wise subtraction from scalar. Preserves shape.
+	// Grad: ten.grad -= out.grad (negated).
 	friend Tensor operator-(float val, const Tensor& ten);
+
+	// Element-wise scalar multiplication. Preserves shape.
+	// Grad: ten.grad += val * out.grad (scaled).
 	friend Tensor operator*(float val, const Tensor& ten);
+
+	// Element-wise scalar division. Preserves shape.
+	// Grad: ten.grad -= out.grad * (out / ten).
 	friend Tensor operator/(float val, const Tensor& ten);
 
+	// Element-wise negation. Preserves shape.
+	// Grad: ten.grad -= out.grad (negated).
 	Tensor operator-() const;
 
-	// --- Comparissons ---
-	// These operators will return all boolean tensors, meaning tensors with zeros or 
-	// ones with the same shape as the first tensor, the second tensor must either have 
-	// the same shape or cleanly broadcast to the first one. The individual values depend 
-	// on individual comparissons between elements.
-
-	friend Tensor operator< (const Tensor& ten0, const Tensor& ten1);
-	friend Tensor operator> (const Tensor& ten0, const Tensor& ten1);
-	friend Tensor operator<=(const Tensor& ten0, const Tensor& ten1);
-	friend Tensor operator>=(const Tensor& ten0, const Tensor& ten1);
-	friend Tensor operator==(const Tensor& ten0, const Tensor& ten1);
-	friend Tensor operator!=(const Tensor& ten0, const Tensor& ten1);
-
-	friend Tensor operator< (const Tensor& ten, float val);
-	friend Tensor operator> (const Tensor& ten, float val);
-	friend Tensor operator<=(const Tensor& ten, float val);
-	friend Tensor operator>=(const Tensor& ten, float val);
-	friend Tensor operator==(const Tensor& ten, float val);
-	friend Tensor operator!=(const Tensor& ten, float val);
-
-	friend Tensor operator< (float val, const Tensor& ten);
-	friend Tensor operator> (float val, const Tensor& ten);
-	friend Tensor operator<=(float val, const Tensor& ten);
-	friend Tensor operator>=(float val, const Tensor& ten);
-	friend Tensor operator==(float val, const Tensor& ten);
-	friend Tensor operator!=(float val, const Tensor& ten);
-
 	// --- "In-place" operators ---
-	// In-place operators do not modify the data inside of them, instead they create a new
-	// tensor data and assign it to themselves, while the old data remains unchanged. That 
-	// being said, they do act as in-place operators if the tensor does not have gradient 
-	// and there is only one instance, making operations more efficient.
+	// In-place operators do not modify their internal data, instead they create new tensor data 
+	// and assign it to themselves, while the old data remains unchanged. The only exception is 
+	// when the tensors do not have gradient and there are no other instances holding that data, 
+	// in that case it is safe to operate in-place. 
+	// They follow the same broadcast rules as the standard operators. Gradients are only propagated
+	// when the operated tensor has a gradient, in-place operations will not create a gradient on a 
+	// tensor with no-grad. If the tensor did have a gradient, the gradient is copied to the output
+	// tensor, meaning these operations preserve the gradient.
 
+	// In-place element-wise addition. Preserves tensor's shape.
+	// Grad: this.grad += out.grad, other.grad += out.grad.
 	Tensor& operator+=(const Tensor& other);
+
+	// In-place element-wise subtraction. Preserves tensor's shape.
+	// Grad: this.grad += out.grad, ten.grad -= out.grad.
 	Tensor& operator-=(const Tensor& other);
+
+	// In-place element-wise multiplication. Preserves tensor's shape.
+	// Grad: this.grad += out.grad * other, other.grad += out.grad * this.
 	Tensor& operator*=(const Tensor& other);
+
+	// In-place element-wise division. Preserves tensor's shape.
+	// Grad: this.grad += out.grad / other, other.grad -= out.grad * (out / other).
 	Tensor& operator/=(const Tensor& other);
 
+	// In-place element-wise scalar addition. Preserves shape.
+	// Grad: this.grad += out.grad (unchanged).
 	Tensor& operator+=(float val);
+
+	// In-place element-wise scalar subtraction. Preserves shape.
+	// Grad: this.grad += out.grad (unchanged).
 	Tensor& operator-=(float val);
+
+	// In-place element-wise scalar multiplication. Preserves shape.
+	// Grad: this.grad += val * out.grad (scaled).
 	Tensor& operator*=(float val);
+
+	// In-place element-wise division by scalar. Preserves shape.
+	// Grad: this.grad += out.grad / val (scaled).
 	Tensor& operator/=(float val);
 
-	// --- Friendzone ---
-	// These is the section for all the functions and classes that require access to the internal 
-	// data of Tensor. Either to create TensorOps for backpropagation or to modify tensor internals.
+	// --- Comparissons ---
+	// These operators return boolean tensors, meaning tensors with zeros or ones, with the same 
+	// shape as the first tensor, the second tensor must either have the same shape or broadcast 
+	// cleanly to the first one. Clean broadcasting means broadcasting only along leading dimensions.
+	// The output values depend on element-wise comparisons. Output tensors do not have gradient.
 
-	// Needs access to internal data. To modify input tensor properties.
-	friend class Module;
+	friend Tensor operator< (const Tensor& ten0, const Tensor& ten1);	// Element-wise smaller than. Preserves first tensor shape.
+	friend Tensor operator> (const Tensor& ten0, const Tensor& ten1);	// Element-wise greater than. Preserves first tensor shape.
+	friend Tensor operator<=(const Tensor& ten0, const Tensor& ten1);	// Element-wise less than or equal. Preserves first tensor shape.
+	friend Tensor operator>=(const Tensor& ten0, const Tensor& ten1);	// Element-wise greater than or equal. Preserves first tensor shape.
+	friend Tensor operator==(const Tensor& ten0, const Tensor& ten1);	// Element-wise equality. Preserves first tensor shape.
+	friend Tensor operator!=(const Tensor& ten0, const Tensor& ten1);	// Element-wise non-equality. Preserves first tensor shape.
+
+	friend Tensor operator< (const Tensor& ten, float val);		// Element-wise smaller than scalar. Preserves tensor shape.
+	friend Tensor operator> (const Tensor& ten, float val);		// Element-wise greater than scalar. Preserves tensor shape.
+	friend Tensor operator<=(const Tensor& ten, float val);		// Element-wise less than or equal to scalar. Preserves tensor shape.
+	friend Tensor operator>=(const Tensor& ten, float val);		// Element-wise greater than or equal to scalar. Preserves tensor shape.
+	friend Tensor operator==(const Tensor& ten, float val);		// Element-wise equality to scalar. Preserves tensor shape.
+	friend Tensor operator!=(const Tensor& ten, float val);		// Element-wise non-equality to scalar. Preserves tensor shape.
+
+	friend Tensor operator< (float val, const Tensor& ten);		// Element-wise greater than scalar. Preserves tensor shape.
+	friend Tensor operator> (float val, const Tensor& ten);		// Element-wise smaller than scalar. Preserves tensor shape.
+	friend Tensor operator<=(float val, const Tensor& ten);		// Element-wise greater than or equal to scalar. Preserves tensor shape.
+	friend Tensor operator>=(float val, const Tensor& ten);		// Element-wise less than or equal to scalar. Preserves tensor shape.
+	friend Tensor operator==(float val, const Tensor& ten);		// Element-wise equality to scalar. Preserves tensor shape.
+	friend Tensor operator!=(float val, const Tensor& ten);		// Element-wise non-equality to scalar. Preserves tensor shape.
+
+	// --- Friendzone ---
+	// This section contains all functions and classes that require access to Tensor's internal
+	// data. They either create TensorOps for backpropagation or modify tensor internals.
 
 	// All these functions define TensorOp classes, so they need internal access.
 	friend Tensor Functional::matmul(const Tensor& mat0, const Tensor& mat1, bool transA, bool transB);

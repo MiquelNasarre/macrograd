@@ -12,24 +12,30 @@
 --------------------------------------------------------------------------------------------------------------------------
 */
 
-void Module::add_module(const Module& module)
+// Registers a submodule inside this module. Any modules contained inside 
+// the class must be registered using this function. The parameters of 
+// the submodule are appended to this module's internal parameter list.
+
+void Module::add_module(Module& module)
 {
 	// Add the parameters to your list.
 	for (unsigned i = 0; i < module._parameter_count; i++)
-		add_parameter(module._parameters[i]);
+		add_parameter(*module._parameters[i]);
 }
 
-void Module::add_parameter(Tensor* tensor)
+// Registers a tensor as a parameter of the module. Only tensors
+// registered through this function are included in the internal
+// parameter list. Gradients are automatically enabled for the tensor.
+
+void Module::add_parameter(Tensor& tensor)
 {
 	// The tensor must be initialized.
-	MACROGRAD_CHECK(tensor && tensor->_internals,
+	MACROGRAD_CHECK(tensor.is_init(),
 		"An empty tensor can not be a parameter.\n"
 		"Make sure your tensors are properly initialized before adding them as parameters."
 	);
 	// Force gradient into the tensor.
-	tensor->_is_no_grad = false;
-	if (!tensor->_internals->gradient)
-		tensor->_internals->gradient = new Tensor(tensor->shape(), tensor->device(), false);
+	tensor = tensor.with_grad();
 
 	// Create new tensor list.
 	Tensor** new_parameters = new Tensor*[_parameter_count + 1];
@@ -37,31 +43,41 @@ void Module::add_parameter(Tensor* tensor)
 	// Copy all tensors to new list, including new tensor.
 	for (unsigned i = 0; i < _parameter_count; i++)
 		new_parameters[i] = _parameters[i];
-	new_parameters[_parameter_count++] = tensor;
+	new_parameters[_parameter_count++] = &tensor;
 
-	// Delete all list.
+	// Delete old list, store new one.
 	if (_parameters)
 		delete[] _parameters;
 	_parameters = new_parameters;
 }
 
+// Disables gradients for all parameters in the module. Forward
+// passes executed afterwards will not create a gradient tree.
+
 void Module::no_grad()
 {
 	for (unsigned i = 0; i < _parameter_count; i++)
-		_parameters[i]->_is_no_grad = true;
+		*_parameters[i] = _parameters[i]->no_grad();
 }
+
+// Enables gradients for all parameters in the module. Forward
+// passes executed afterwards will create a gradient tree.
 
 void Module::with_grad()
 {
 	for (unsigned i = 0; i < _parameter_count; i++)
-		_parameters[i]->_is_no_grad = false;
+		*_parameters[i] = _parameters[i]->with_grad();
 }
+
+// Sets all parameter gradients to zero.
 
 void Module::zero_grad()
 {
 	for (unsigned i = 0; i < _parameter_count; i++)
 		_parameters[i]->zero_grad();
 }
+
+// Sends all the parameters to the device specified.
 
 void Module::to(const char* device)
 {
@@ -75,6 +91,8 @@ void Module::to(const char* device)
 --------------------------------------------------------------------------------------------------------------------------
 */
 
+// Header of a weights file.
+// Magic spells "MACROGD" :)
 struct FileHeader 
 {
 	uint64_t magic	 = 0x0044474F5243414Dull;
@@ -83,6 +101,8 @@ struct FileHeader
 	uint64_t count;
 };
 
+// Tensor descriptor struct.
+// Guess what magic spells?
 struct TensorHeader
 {
 	uint64_t magic = 0x0A524F534E45540Aull;
@@ -91,7 +111,7 @@ struct TensorHeader
 	uint64_t byte_size;
 };
 
-// Inline hepler to create a deterministice key based on the 
+// Inline helper to create a deterministice key based on the 
 // shape dimensions. Collisions are extremely unlikely.
 static inline uint64_t hash_tensor(const Shape& shape)
 {
@@ -110,6 +130,11 @@ static inline uint64_t hash_tensor(const Shape& shape)
 
 	return key;
 }
+
+// Save/load weight functions. These allow the user to store the model weights at 
+// any time in binary files, for later reloading. They can be used from any device. 
+// The module architecture when loading must match the one used during saving.
+// I suggest the *.mg file extension because it looks cool :)
 
 void Module::save_weights(const char* path) const
 {
@@ -138,7 +163,7 @@ void Module::save_weights(const char* path) const
 		TensorHeader thead = {};
 		thead.idx = i;
 		thead.hash = hash_tensor(_parameters[i]->shape());
-		thead.byte_size = _parameters[i]->byte_size();
+		thead.byte_size = _parameters[i]->data_size();
 		write(&thead, sizeof(thead));
 	}
 
@@ -150,19 +175,19 @@ void Module::save_weights(const char* path) const
 		// If the tensor is in the GPU we will need to copy the memory to an intermediate buffer.
 		if (ten.is_gpu())
 		{
-			void* buffer = ::operator new[](ten.byte_size(), std::align_val_t(64));
+			void* buffer = ::operator new[](ten.data_size(), std::align_val_t(64));
 
 			// Copy memory to buffer.
-			cuda::copy_gpu_to_cpu(buffer, ten.internal_data(), ten.byte_size());
+			cuda::copy_gpu_to_cpu(buffer, ten.internal_data(), ten.data_size());
 
 			// Dump it to file.
-			write(buffer, ten.byte_size());
+			write(buffer, ten.data_size());
 
 			// Free the buffer.
 			::operator delete[](buffer, std::align_val_t(64));
 		}
 		// Else simply dump the internal data.
-		else write(ten.internal_data(), ten.byte_size());
+		else write(ten.internal_data(), ten.data_size());
 	}
 
 	// Close file and return.
@@ -170,6 +195,11 @@ void Module::save_weights(const char* path) const
 		MACROGRAD_ERROR("File close failure during save weights call.");
 	return;
 }
+
+// Save/load weight functions. These allow the user to store the model weights at 
+// any time in binary files, for later reloading. They can be used from any device. 
+// The module architecture when loading must match the one used during saving.
+// I suggest the *.mg file extension because it looks cool :)
 
 void Module::load_weights(const char* path)
 {
@@ -226,7 +256,7 @@ void Module::load_weights(const char* path)
 			"Invalid tensor shape hash found during a load weights call. Make sure the shape of the model\n"
 			"parameters and the model architecture are the same to the ones used to generate the save file."
 		);
-		MACROGRAD_CHECK(thead.byte_size == _parameters[i]->byte_size(),
+		MACROGRAD_CHECK(thead.byte_size == _parameters[i]->data_size(),
 			"Invalid tensor total byte size found during a load weights call. Make sure the shape of the model\n"
 			"parameters and the model architecture are the same to the ones used to generate the save file."
 		);
@@ -240,19 +270,19 @@ void Module::load_weights(const char* path)
 		// If the tensor is in the GPU we will need to read the file to an intermediate buffer.
 		if (ten.is_gpu())
 		{
-			void* buffer = ::operator new[](ten.byte_size(), std::align_val_t(64));
+			void* buffer = ::operator new[](ten.data_size(), std::align_val_t(64));
 
 			// Read file to buffer.
-			read(buffer, ten.byte_size());
+			read(buffer, ten.data_size());
 
 			// Copy buffer to CUDA tensor memory.
-			cuda::copy_cpu_to_gpu(ten.internal_data(), buffer, ten.byte_size());
+			cuda::copy_cpu_to_gpu(ten.internal_data(), buffer, ten.data_size());
 
 			// Free the buffer.
 			::operator delete[](buffer, std::align_val_t(64));
 		}
 		// Else simply read to the internal data.
-		else read(ten.internal_data(), ten.byte_size());
+		else read(ten.internal_data(), ten.data_size());
 	}
 
 	// Just to see if you wrote something in my save file.
@@ -268,44 +298,12 @@ void Module::load_weights(const char* path)
 
 /*
 --------------------------------------------------------------------------------------------------------------------------
- LinearLR Scheduler
---------------------------------------------------------------------------------------------------------------------------
-*/
-
-Scheduler::LinearLR::LinearLR(Optim& optimizer, float initial_lr, float final_lr, unsigned epoch) :
-	Sched(optimizer), _lr0{ initial_lr }, _lr1{ final_lr }, total_epoch{ epoch }
-{
-	step();
-}
-
-void Scheduler::LinearLR::step()
-{
-	ref_learning_rate() = (_lr1 - _lr0) * (float(_epoch++) / total_epoch) + _lr0;
-}
-
-/*
---------------------------------------------------------------------------------------------------------------------------
- CosineLR Scheduler
---------------------------------------------------------------------------------------------------------------------------
-*/
-
-Scheduler::CosineLR::CosineLR(Optim& optimizer, float initial_lr, float final_lr, unsigned epoch) :
-	Sched(optimizer), _lr0{ initial_lr }, _lr1{ final_lr }, total_epoch{ epoch } 
-{
-	step();
-}
-
-void Scheduler::CosineLR::step()
-{
-	float cos_epoch = cosf((3.141592f * _epoch++) / total_epoch);
-	ref_learning_rate() = (_lr0 - _lr1) * (1.f + cos_epoch) / 2.f + _lr1;
-}
-
-/*
---------------------------------------------------------------------------------------------------------------------------
  SGD Optimizer
 --------------------------------------------------------------------------------------------------------------------------
 */
+
+// Constructor. Stores the module and creates the momentum tensor for each
+// one of its parameters. Make sure the module is fully initialized.
 
 Optimizer::SGD::SGD(Module& module, float momentum, float learning_rate, float weight_decay) :
 	Optim(module), _momentum{ momentum }
@@ -325,10 +323,16 @@ Optimizer::SGD::SGD(Module& module, float momentum, float learning_rate, float w
 		_gradient_storage[i] = Tensor(Shape(parameters[i]->numel()), parameters[i]->device(), false);
 }
 
+// Destructor, deletes the momentum storage.
+
 Optimizer::SGD::~SGD() 
 { 
 	delete[] _gradient_storage; 
 }
+
+// During an optimizer step, each momentum tensor is updated from the current
+// parameter gradient and the momentum value. The model parameters are then
+// updated using these accumulated momentum terms, and weight decay is applied.
 
 void Optimizer::SGD::step()
 {
@@ -355,6 +359,10 @@ void Optimizer::SGD::step()
 --------------------------------------------------------------------------------------------------------------------------
 */
 
+// Constructor. Stores the module and creates the two moment tensors for 
+// each of its parameters. Make sure the module is fully initialized before 
+// creating its optimizer.
+
 Optimizer::AdamW::AdamW(Module& module, float learning_rate, float weight_decay, float beta1, float beta2, float eps) :
 	Optim(module), _beta1{ beta1 }, _beta2{ beta2 }, _eps{ eps }
 {
@@ -376,11 +384,17 @@ Optimizer::AdamW::AdamW(Module& module, float learning_rate, float weight_decay,
 	}
 }
 
+// Destructor, deletes the moment tensors.
+
 Optimizer::AdamW::~AdamW()
 {
 	delete[] _moment1;
 	delete[] _moment2;
 }
+
+// During an AdamW optimizer step, the first and second moments of each
+// parameter are updated and used to compute adaptive parameter updates.
+// Weight decay is applied separately from the gradient-based update.
 
 void Optimizer::AdamW::step()
 {
@@ -415,4 +429,53 @@ void Optimizer::AdamW::step()
 		parameters[i]->internal_multiply(&decay_factor);
 		parameters[i]->internal_add_prod(-_learning_rate, m_hat / (v_hat.sqrt() + _eps));
 	}
+}
+
+/*
+--------------------------------------------------------------------------------------------------------------------------
+ LinearLR Scheduler
+--------------------------------------------------------------------------------------------------------------------------
+*/
+
+// Constructor, takes as input the target optimizer, the initial and final
+// learning rate values, and the number of epochs. Performs one step() call
+// to set the initial learning rate.
+
+Scheduler::LinearLR::LinearLR(Optim& optimizer, float initial_lr, float final_lr, unsigned epoch) :
+	Sched(optimizer), _lr0{ initial_lr }, _lr1{ final_lr }, total_epoch{ epoch }
+{
+	step();
+}
+
+// Scheduler step call, linearly interpolates between the initial and final
+// learning rate values over the specified number of epochs.
+
+void Scheduler::LinearLR::step()
+{
+	ref_learning_rate() = (_lr1 - _lr0) * (float(_epoch++) / total_epoch) + _lr0;
+}
+
+/*
+--------------------------------------------------------------------------------------------------------------------------
+ CosineLR Scheduler
+--------------------------------------------------------------------------------------------------------------------------
+*/
+
+// Constructor, takes as input the target optimizer, the initial and final
+// learning rate values, and the number of epochs. Performs one step() call
+// to set the initial learning rate.
+
+Scheduler::CosineLR::CosineLR(Optim& optimizer, float initial_lr, float final_lr, unsigned epoch) :
+	Sched(optimizer), _lr0{ initial_lr }, _lr1{ final_lr }, total_epoch{ epoch }
+{
+	step();
+}
+
+// Scheduler step call, follows a cosine curve from the initial learning
+// rate to the final learning rate over the specified number of epochs.
+
+void Scheduler::CosineLR::step()
+{
+	float cos_epoch = cosf((3.141592f * _epoch++) / total_epoch);
+	ref_learning_rate() = (_lr0 - _lr1) * (1.f + cos_epoch) / 2.f + _lr1;
 }

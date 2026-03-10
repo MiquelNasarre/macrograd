@@ -2,8 +2,6 @@
 #include "macrograd.h"
 #include "cuda_backend.h"
 
-#include <math.h>
-
 #include <cuda_runtime.h>
 #include <cublasLt.h>
 #include <curand_kernel.h>
@@ -117,6 +115,8 @@ void MemPool::free(void* data_ptr)
 --------------------------------------------------------------------------------------------------------------------------
 */
 
+// Sets the data to zero for the specified byte size.
+
 void cuda::zero_data(void* data_ptr, size_t byte_size)
 {
     CUDA_CHECK(cudaMemsetAsync(data_ptr, 0, byte_size, stream::get()));
@@ -162,7 +162,7 @@ void cuda::set_to_one(void* data_ptr)
 
 /*
 --------------------------------------------------------------------------------------------------------------------------
- Kernel functions
+ Contiguous Element-Wise Functions
 --------------------------------------------------------------------------------------------------------------------------
 */
 
@@ -920,6 +920,12 @@ void kernel_ops::divide_tensor(void* out_data, const void* num_data, const void*
     }
 }
 
+/*
+--------------------------------------------------------------------------------------------------------------------------
+ Indexed Ordering Functions
+--------------------------------------------------------------------------------------------------------------------------
+*/
+
 __global__ void tensor_bracket_op_single_kernel_vec(float4* out, const float4* ten, const int* indices_data, size_t num_indices, size_t vec_stride, size_t range)
 {
     size_t id = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1066,7 +1072,7 @@ void kernel_ops::vector_bracket_op(void* out_data, const void* vec_data, const v
 
 /*
 --------------------------------------------------------------------------------------------------------------------------
- Non Linearities
+ Element-Wise Operators
 --------------------------------------------------------------------------------------------------------------------------
 */
 
@@ -1688,7 +1694,7 @@ void kernel_ops::pow(void* out_data, const void* in_data, float exp, size_t num_
 
 /*
 --------------------------------------------------------------------------------------------------------------------------
- RNG initialization
+ RNG & Initialization
 --------------------------------------------------------------------------------------------------------------------------
 */
 
@@ -3967,7 +3973,7 @@ void kernel_ops::causal_mast(void* out_data, int L)
 
 /*
 --------------------------------------------------------------------------------------------------------------------------
- Regular Operators
+ Standard Operators
 --------------------------------------------------------------------------------------------------------------------------
 */
 

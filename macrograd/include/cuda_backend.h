@@ -1,7 +1,65 @@
 #pragma once
+
+/* LICENSE AND COPYRIGHT
+--------------------------------------------------------------------------------------------------------------------------
+ * Macrograd - a CUDA/C++ Autograd Tensor Library
+ * Copyright (c) 2026 Miguel Nasarre Budiño
+ * Licensed under the MIT License. See LICENSE file.
+--------------------------------------------------------------------------------------------------------------------------
+*/
+
+/* MACROGRAD CUDA BACKEND HEADER
+--------------------------------------------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------------------------------------------------
+ This header contains all the CUDA functions used by this library, which represent 
+ Macrograd's computational core. 
+ 
+ CPUs are really smart, and they can do a wide variety of complex tasks, but they suck at math. 
+ If you set your model to train on the CPU instead of CUDA and run the debugger, you will see 
+ that the poor machine is stuck in the same for loop for 95% of the runtime multiplying two 
+ numbers and adding them to a matrix cell.
+ 
+ All this time loss seems like a waste of its capabilities. It would be nice if the CPU had a 
+ calculator to send these trivial tasks to while it manages the overall flow of the computation. 
+ This is where GPUs can help.
+ 
+ GPUs are really dumb, they can only do one simple thing at a time, but they can do it thousands 
+ of times in parallel, which is quite nice. So if we send our big matrix multiplication to the 
+ GPU to run while the CPU controls it, we have effectively given our CPU an amazing calculator.
+ 
+ This header contains all the necessary functions the CPU will need to use its fancy calculator. 
+ These are organized as follows:
+ 
+ - MemPool class: This allows for easy centralized allocation and freeing of space in
+   CUDA. All allocations and frees are done by this class and run asynchronously.
+ 
+ - cuda namespace: Contains basic CUDA utilities used by the library, such as device
+   transfers, memory zeroing, and stream synchronization.
+ 
+ - kernel_ops namespace: This is where all the mathematical operations are defined,
+   which launch kernels to run on CUDA for each different tensor operation.
+ 
+ As mentioned, all the computations run asynchronously with respect to the CPU. In this library 
+ they all run on the same stream, defined at the top of the backend source file. Some functions 
+ do cause synchronization, mainly memory transfers between devices, and that can severely harm 
+ performance, so be careful when using any of those.
+ 
+ Feel free to look through the source file to learn how some basic CUDA kernels can be 
+ implemented. The only function that does not use my own defined kernels is matrix
+ multiplication, since as mentioned before it represents the largest amount of compute.
+ Therefore I use cuBLAS dependencies to maximize its speed.
+--------------------------------------------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------------------------------------------------
+*/
+
+// Include main library header.
 #include "macrograd.h"
+
+// Include stdint for size_t.
 #include <stdint.h>
 
+// MemPool class. Controls all CUDA allocations done by this library.
+// Currently uses the default cudaMallocAsync/cudaFreeAsync.
 class MemPool
 {
 	MemPool() = delete;
@@ -13,6 +71,8 @@ public:
 	static void free(void* data_ptr);
 };
 
+// cuda namespace: Contains basic CUDA utilities used by the library, such as device
+// transfers, memory zeroing, and stream synchronization.
 namespace cuda
 {
 	// Sets the data to zero for the specified byte size.
@@ -34,8 +94,14 @@ namespace cuda
 	void set_to_one(void* data_ptr);
 }
 
+// kernel_ops namespace: This is where all the mathematical operations are defined,
+// which launch kernels to run on CUDA for each different tensor operation.
+// For RNG and initialization related operations it uses cuRAND. And specifically 
+// for matrix multiplication uses cuBLAS to improve performance.
 namespace kernel_ops
 {
+	// --- Contiguous Element-Wise Functions ---
+
 	void set_scalar(void* out_data, const float* val, size_t num_elements, bool is_gpu, float factor);
 	void add_scalar(void* out_data, const void* ten_data, const float* val, size_t num_elements, bool is_gpu, float factor);
 	void add_tensor(void* out_data, const void* sum0_data, const void* sum1_data, size_t num_elements);
@@ -46,6 +112,8 @@ namespace kernel_ops
 	void add_multiply_scalar_tensor(void* out_data, float val, const void* fac_data, size_t num_elements);
 	void subtract_tensor(void* out_data, const void* sum_data, const void* sub_data, size_t num_elements);
 	void divide_tensor(void* out_data, const void* num_data, const void* den_data, size_t num_elements);
+
+	// --- Indexed Ordering Functions ---
 
 	void tensor_bracket_op(void* out_data, const void* ten_data, const void* indices_data, size_t num_indices, size_t stride, size_t range);
 	void vector_bracket_op(void* out_data, const void* vec_data, const void* indices_data, size_t num_indices, size_t range);
@@ -64,7 +132,7 @@ namespace kernel_ops
 	void square	(void* out_data, const void* in_data, size_t num_elements);
 	void pow	(void* out_data, const void* in_data, float exp, size_t num_elements);
 
-	// --- RNG Initialization ---
+	// --- RNG & Initialization Functions ---
 
 	void set_seed(size_t seed);
 	void normal(void* data_ptr, float mean, float std, size_t num_elements);
@@ -85,7 +153,7 @@ namespace kernel_ops
 	void argmax(void* out_data, const void* in_data, size_t num_cases, size_t num_elements, size_t case_stride, size_t elem_stride);
 	void argmin(void* out_data, const void* in_data, size_t num_cases, size_t num_elements, size_t case_stride, size_t elem_stride);
 
-	// --- Shape modifiers ---
+	// --- Shape Modifiers ---
 
 	void transpose(void* out_data, const void* in_data, int A, int B, size_t outter_size, size_t middle_size, size_t inner_size, size_t in_stride, size_t out_stride);
 	void subset(const Shape& out_shape, const Shape& in_shape, const Shape& idxs, void* out_data, const void* in_data);
@@ -103,7 +171,7 @@ namespace kernel_ops
 	void one_hot(void* out_data, const void* labels_data, size_t num_cases, size_t num_classes);
 	void causal_mast(void* out_data, int L);
 
-	// --- Regular Operators ---
+	// --- Standard Operators ---
 
 	void shaped_add(void* out_data, const void* in0_data, const void* in1_data, const Shape& out_shape, const Shape& in_shape);
 	void shaped_subtract(void* out_data, const void* in0_data, const void* in1_data, const Shape& out_shape, const Shape& in_shape);

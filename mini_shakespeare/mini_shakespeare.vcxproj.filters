@@ -22,5 +22,8 @@
     <ClInclude Include="include\MNIST.h">
       <Filter>Sources\Public</Filter>
     </ClInclude>
+    <ClInclude Include="include\transformer.h">
+      <Filter>Sources\Public</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

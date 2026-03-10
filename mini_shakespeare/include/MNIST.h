@@ -216,13 +216,13 @@ public:
 	{
 		matrix = Tensor(Shape{ in_dim, out_dim }, device);
 		Initialization::uniform(matrix, -sqrtf(6.f / in_dim), sqrtf(6.f / in_dim));
-		add_parameter(&matrix);
+		add_parameter(matrix);
 
 		if (has_bias)
 		{
 			bias = Tensor(Shape{ out_dim, }, device);
 			Initialization::uniform(bias, -sqrtf(1.f / in_dim), sqrtf(1.f / in_dim));
-			add_parameter(&bias);
+			add_parameter(bias);
 		}
 	}
 
@@ -417,6 +417,6 @@ image_loop:
 		scanf_s(" %127s", &save_path, 128);
 
 		mlp.save_weights(save_path);
-		printf("[ Weights successfully saved to \"%s\" ]\n", save_path);
+		printf("\n[ Weights successfully saved to \"%s\" ]\n", save_path);
 	}
 }

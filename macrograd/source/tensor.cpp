@@ -7,14 +7,14 @@
 #include <string.h>
 #include <new>
 
-// Macro to help with data acess on CPU.
-#define __data ((float*)_internals->_data)
-
 /*
 --------------------------------------------------------------------------------------------------------------------------
  Shape functions
 --------------------------------------------------------------------------------------------------------------------------
 */
+
+// Pointer initializer. Creates a shape with the given number of dimensions and copies them 
+// from the pointer if it is not null. Else the dimensions are zero-initialized.
 
 Shape::Shape(unsigned dim, int* sizes) : _dim{ dim }
 {
@@ -30,6 +30,8 @@ Shape::Shape(unsigned dim, int* sizes) : _dim{ dim }
 		for (unsigned i = 0; i < dim; i++)
 			_sizes[i] = 0;
 }
+
+// Copy operator, copies the sizes of the other shape.
 
 Shape& Shape::operator=(const Shape& other)
 {
@@ -57,6 +59,8 @@ Shape& Shape::operator=(const Shape& other)
 	return *this;
 }
 
+// Checks if all individual dimensions match.
+
 bool Shape::operator==(const Shape& other) const
 {
 	if (_dim != other._dim) 
@@ -68,6 +72,8 @@ bool Shape::operator==(const Shape& other) const
 
 	return true;
 }
+
+// Removes the specified dimension. Supports negative indexing.
 
 void Shape::remove(int dim)
 {
@@ -99,6 +105,9 @@ void Shape::remove(int dim)
 	_sizes = new_sizes;
 }
 
+// Adds a new dimension on the specified spot with the given value.
+// Supports negative indexing (modulo dim() + 1).
+
 void Shape::add(int dim, int size)
 {
 	if (!_dim)
@@ -126,6 +135,8 @@ void Shape::add(int dim, int size)
 	delete[] _sizes;
 	_sizes = new_sizes;
 }
+
+// Returns a string representation of the shape.
 
 const char* Shape::str(const char* fmt) const
 {
@@ -163,6 +174,8 @@ const char* Shape::str(const char* fmt) const
 --------------------------------------------------------------------------------------------------------------------------
 */
 
+// Reduces the instance count by one. If none are left, it deletes the data.
+
 void VectorInt::reduce_instance_count()
 {
 	if (!_internals) 
@@ -176,6 +189,8 @@ void VectorInt::reduce_instance_count()
 		delete _internals;
 	}
 }
+
+// Constructor, creates a zero-initialized vector with the given length on the specified device.
 
 VectorInt::VectorInt(unsigned length, const char* device)
 {
@@ -211,6 +226,9 @@ VectorInt::VectorInt(unsigned length, const char* device)
 	);
 }
 
+// Arange constructor, creates a vector with values in the range [a,b) with the specified stride. 
+// The distance between a and b must be divisible by the stride and must have the same sign.
+
 VectorInt::VectorInt(int a, int b, int stride, const char* device)
 {
 	MACROGRAD_CHECK((b - a > 0 && stride > 0) || (b - a < 0 && stride < 0),
@@ -233,6 +251,8 @@ VectorInt::VectorInt(int a, int b, int stride, const char* device)
 		((int*)_internals->_data)[i] = a + i * stride;
 }
 
+// Copy operator, gets a view on the other vector's data.
+
 VectorInt& VectorInt::operator=(const VectorInt& other)
 {
 	if (other._internals)
@@ -246,6 +266,37 @@ VectorInt& VectorInt::operator=(const VectorInt& other)
 
 	return *this;
 }
+
+// Returns an element-wise copy of the vector in the specified device.
+
+VectorInt VectorInt::to(const char* device) const
+{
+	MACROGRAD_CHECK(_internals,
+		"'to()' function on an empty VectorInt is not allowed"
+	);
+
+	VectorInt out(_length, device);
+
+	if (_internals->_is_gpu)
+	{
+		if (out._internals->_is_gpu)
+			cuda::copy_gpu_to_gpu(out._internals->_data, (int*)_internals->_data + _offset, _length * sizeof(int));
+		else
+			cuda::copy_gpu_to_cpu(out._internals->_data, (int*)_internals->_data + _offset, _length * sizeof(int));
+	}
+	else
+	{
+		if (out._internals->_is_gpu)
+			cuda::copy_cpu_to_gpu(out._internals->_data, (int*)_internals->_data + _offset, _length * sizeof(int));
+		else
+			memcpy(out._internals->_data, (int*)_internals->_data + _offset, _length * sizeof(int));
+	}
+
+	return out;
+}
+
+// Permutation operator. Returns a new vector containing the data 
+// of the current vector, reordered as specified by the indices.
 
 VectorInt VectorInt::operator[](const VectorInt& idxs) const
 {
@@ -290,6 +341,10 @@ VectorInt VectorInt::operator[](const VectorInt& idxs) const
 	return out;
 }
 
+// Access operator, returns a reference to the corresponding element of 
+// the vector. Supports negative and circular indexing. These operators 
+// are only allowed on CPU vectors, for CUDA use get()/set() instead.
+
 int& VectorInt::operator[](int i)
 {
 	MACROGRAD_CHECK(_internals,
@@ -303,6 +358,10 @@ int& VectorInt::operator[](int i)
 	return ((int*)_internals->_data + _offset)[idx];
 }
 
+// Access operator, returns a reference to the corresponding element of 
+// the vector. Supports negative and circular indexing. These operators 
+// are only allowed on CPU vectors, for CUDA use get()/set() instead.
+
 const int& VectorInt::operator[](int i) const
 {
 	MACROGRAD_CHECK(_internals,
@@ -315,6 +374,9 @@ const int& VectorInt::operator[](int i) const
 	int idx = mod(i, (int)_length);
 	return ((int*)_internals->_data + _offset)[idx];
 }
+
+// Returns the integer at the i-th position in the vector. 
+// Supports negative and circular indexing.
 
 int VectorInt::get(int i) const
 {
@@ -330,6 +392,9 @@ int VectorInt::get(int i) const
 	return val;
 }
 
+// Sets the integer at the i-th position in the vector to the 
+// given value. Supports negative and circular indexing.
+
 void VectorInt::set(int i, int val)
 {
 	MACROGRAD_CHECK(_internals,
@@ -341,6 +406,9 @@ void VectorInt::set(int i, int val)
 	if (_internals->_is_gpu) cuda::copy_cpu_to_gpu((int*)_internals->_data + _offset + idx, &val, sizeof(int));
 	else ((int*)_internals->_data + _offset)[idx] = val;
 }
+
+// Copies the indices from the pointer to the [a,b) range
+// of the vector. This being a total of (b-a) elements.
 
 void VectorInt::set(int a, int b, int* values)
 {
@@ -365,31 +433,7 @@ void VectorInt::set(int a, int b, int* values)
 		memcpy((int*)_internals->_data + _offset + idx_a, values, (idx_b - idx_a) * sizeof(int));
 }
 
-VectorInt VectorInt::to(const char* device) const
-{
-	MACROGRAD_CHECK(_internals,
-		"'to()' function on an empty VectorInt is not allowed"
-	);
-
-	VectorInt out(_length, device);
-	
-	if (_internals->_is_gpu)
-	{
-		if (out._internals->_is_gpu)
-			cuda::copy_gpu_to_gpu(out._internals->_data, (int*)_internals->_data + _offset, _length * sizeof(int));
-		else 
-			cuda::copy_gpu_to_cpu(out._internals->_data, (int*)_internals->_data + _offset, _length * sizeof(int));
-	}
-	else
-	{
-		if (out._internals->_is_gpu)
-			cuda::copy_cpu_to_gpu(out._internals->_data, (int*)_internals->_data + _offset, _length * sizeof(int));
-		else
-			memcpy(out._internals->_data, (int*)_internals->_data + _offset, _length * sizeof(int));
-	}
-
-	return out;
-}
+// Returns a view of the current vector with its elements in the range [a,b).
 
 VectorInt VectorInt::subset(int a, int b) const
 {
@@ -414,6 +458,8 @@ VectorInt VectorInt::subset(int a, int b) const
 	return out;
 }
 
+// Returns an element-wise copy of the vector.
+
 VectorInt VectorInt::copy() const
 {
 	if (!_internals)
@@ -428,6 +474,8 @@ VectorInt VectorInt::copy() const
 
 	return out;
 }
+
+// Returns a string representation of the vector.
 
 const char* VectorInt::str(const char* fmt) const
 {
@@ -468,9 +516,88 @@ const char* VectorInt::str(const char* fmt) const
 
 /*
 --------------------------------------------------------------------------------------------------------------------------
+ Copy Functions
+--------------------------------------------------------------------------------------------------------------------------
+*/
+
+// Returns a copy of the tensor with the specified configuration.
+
+Tensor Tensor::internal_copy(bool with_grad, bool copy_grad) const
+{
+	if (!_internals)
+		return Tensor();
+
+	Tensor out(_view, device(), with_grad);
+
+	if (is_gpu())
+		cuda::copy_gpu_to_gpu(out.internal_data(), internal_data(), data_size());
+	else
+		memcpy(out.internal_data(), internal_data(), data_size());
+
+	if (with_grad && has_grad() && copy_grad && _internals->gradient)
+	{
+		if (is_gpu())
+			cuda::copy_gpu_to_gpu(out.internal_gradient().internal_data(), gradient().internal_data(), data_size());
+		else
+			memcpy(out.internal_gradient().internal_data(), gradient().internal_data(), data_size());
+	}
+	return out;
+}
+
+// Returns a copy of the tensor in the specified device. If the tensor had gradient it also 
+// copies the gradient. Backpropagation data is lost, so you must not use inside a forward pass.
+
+Tensor Tensor::to(const char* device, bool with_grad) const
+{
+	// Create output tensor.
+	Tensor out(_view, device, with_grad);
+
+	const void* ten_data = internal_data();
+	void* out_data = out.internal_data();
+	unsigned _data_size = data_size();
+
+	// Distinguish different cases.
+	if (out.is_gpu())
+	{
+		if (is_gpu())	cuda::copy_gpu_to_gpu(out_data, ten_data, _data_size);
+		else			cuda::copy_cpu_to_gpu(out_data, ten_data, _data_size);
+	}
+	else
+	{
+		if (is_gpu())	cuda::copy_gpu_to_cpu(out_data, ten_data, _data_size);
+		else						   memcpy(out_data, ten_data, _data_size);
+	}
+
+	// If both have gradient copy it too.
+	if (has_grad() && with_grad && _internals->gradient)
+	{
+		const void* ten_grad = gradient().internal_data();
+		void* out_grad = out.internal_gradient().internal_data();
+
+		if (out.is_gpu())
+		{
+			if (is_gpu())	cuda::copy_gpu_to_gpu(out_grad, ten_grad, _data_size);
+			else			cuda::copy_cpu_to_gpu(out_grad, ten_grad, _data_size);
+		}
+		else
+		{
+			if (is_gpu())	cuda::copy_gpu_to_cpu(out_grad, ten_grad, _data_size);
+			else						   memcpy(out_grad, ten_grad, _data_size);
+		}
+	}
+
+	// Return tensor.
+	return out;
+}
+
+/*
+--------------------------------------------------------------------------------------------------------------------------
  Constructor Functions
 --------------------------------------------------------------------------------------------------------------------------
 */
+
+// Copy constructor, creates a tensor with the same view that 
+// shares the pointer to internal data.
 
 Tensor::Tensor(const Tensor& other)
 {
@@ -481,9 +608,12 @@ Tensor::Tensor(const Tensor& other)
 
 		_view = other._view;
 		_stride = other._stride;
-		_is_no_grad = other._is_no_grad;
+		_requires_grad = other._requires_grad;
 	}
 }
+
+// Shape constructor, creates a new tensor with the specified shape 
+// on the provided device and with gradient if specified.
 
 Tensor::Tensor(const Shape& shape, const char* device, bool requires_grad)
 {
@@ -501,6 +631,7 @@ Tensor::Tensor(const Shape& shape, const char* device, bool requires_grad)
 	// Copy view and initialize stride.
 	_view = shape;
 	_stride = Shape(shape.dim(), (int*)nullptr);
+	_requires_grad = requires_grad;
 
 	// Set strides to size * offset of previous dimension.
 	_stride[-1] = 1u;
@@ -536,9 +667,29 @@ Tensor::Tensor(const Shape& shape, const char* device, bool requires_grad)
 		"Supported devices are \"cpu\" and \"cuda\".",
 		device
 	);
+}
 
-	if (requires_grad)
-		_internals->gradient = new Tensor(shape, device, false);
+// Equality operator. Takes the same data pointer as the other tensor and increases the 
+// instances by one. If it was initialized it reduces the instances count on the old data.
+
+Tensor& Tensor::operator=(const Tensor& other)
+{
+	// First increase the others instances just in case.
+	if (other._internals)
+		other._internals->instances++;
+
+	// Reduce your count.
+	reduce_instances_count();
+
+	// Adopt other's data.
+	_internals = other._internals;
+
+	// Also copy no-grad status and view.
+	_requires_grad = other._requires_grad;
+	_view = other._view;
+	_stride = other._stride;
+
+	return *this;
 }
 
 /*
@@ -546,6 +697,9 @@ Tensor::Tensor(const Shape& shape, const char* device, bool requires_grad)
  User Functions
 --------------------------------------------------------------------------------------------------------------------------
 */
+
+// If the tensor has a single element it returns the value of that element.
+// If the tensor is on CUDA this will force a synchronization.
 
 float Tensor::item() const
 {
@@ -563,8 +717,12 @@ float Tensor::item() const
 		cuda::copy_gpu_to_cpu(&val, _internals->_data, sizeof(float));
 		return val;
 	}
-	else return __data[0];
+	else return *internal_data();
 }
+
+// Returns a string representation of the entire tensor. This includes shape,
+// device, operation, gradient and internal data. If the tensor is on CUDA
+// this will force a synchronization.
 
 const char* Tensor::str() const
 {
@@ -593,6 +751,10 @@ const char* Tensor::str() const
 
 	return buffer[(next++) % 8];
 }
+
+// Returns a string representation of the tensor data, separated by dimensions
+// according to the tensor view. If the tensor is on CUDA this will force a 
+// synchronization.
 
 const char* Tensor::array_str(const char* fmt) const
 {
@@ -640,11 +802,11 @@ const char* Tensor::array_str(const char* fmt) const
 		if (is_gpu())
 		{
 			float val;
-			cuda::copy_gpu_to_cpu(&val, __data + idx, sizeof(float));
+			cuda::copy_gpu_to_cpu(&val, internal_data() + idx, sizeof(float));
 			s_print(fmt, val);
 		}
 		else
-			s_print(fmt, __data[idx]);
+			s_print(fmt, internal_data()[idx]);
 
 		if (++counting_shape[-1] < _view[-1])
 		{
@@ -697,15 +859,10 @@ const char* Tensor::array_str(const char* fmt) const
 	return buffer[(next++) % 8];
 }
 
-const char* Tensor::device() const
-{
-	MACROGRAD_CHECK(_internals,
-		"Trying to get the device on an empty tensor is not allowed."
-	);
-
-	// Return internal device string.
-	return _internals->device;
-}
+// The backward pass can only be called on single element tensors that have gradient. 
+// It first sets its gradient to one, then generates the topological graph of the 
+// backward pass, and finally calls the internal _backward() functions of each tensor 
+// operation in topological order.
 
 void Tensor::backward()
 {
@@ -726,9 +883,9 @@ void Tensor::backward()
 
 	// First set your gradient to 1.
 	if (_internals->is_gpu)
-		cuda::set_to_one(_internals->gradient->_internals->_data);
+		cuda::set_to_one(internal_gradient().internal_data());
 	else
-		((float*)_internals->gradient->_internals->_data)[0] = 1.f;
+		internal_gradient().internal_data()[0] = 1.f;
 
 	// Create the topological graph.
 	Tensor** list = nullptr;
@@ -747,74 +904,24 @@ void Tensor::backward()
 		delete[] list;
 }
 
+// If the tensor has gradient it sets all the gradient values to zero.
+
 void Tensor::zero_grad()
 {
 	// Sanity check.
-	if (!has_grad())
+	if (!has_grad() || !_internals->gradient)
 		return;
 
 	// Do changes on GPU tensors.
 	if (_internals->is_gpu)
-		cuda::zero_data(_internals->gradient->_internals->_data, _internals->_data_size);
+		cuda::zero_data(internal_gradient().internal_data(), data_size());
 
 	// Zero the gradient on the CPU.
 	else
-		memset(_internals->gradient->_internals->_data, 0, _internals->_data_size);
+		memset(internal_gradient().internal_data(), 0, data_size());
 }
 
-const char* Tensor::get_operator() const
-{
-	if (_internals && _internals->op)
-		return _internals->op->_type;
-
-	return "None";
-}
-
-// Returns a copy of the tensor in the specified device. If the tensor had gradient it also 
-// copies the gradient. Backpropagation data is lost, so you must not use inside a forward pass.
-
-Tensor Tensor::to(const char* device, bool with_grad) const
-{
-	// Create output tensor.
-	Tensor out(_view, device, with_grad);
-
-	void* ten_data = _internals->_data;
-	void* out_data = out._internals->_data;
-	unsigned data_size = _internals->_data_size;
-
-	// Distinguish different cases.
-	if (out.is_gpu())
-	{
-		if (is_gpu())	cuda::copy_gpu_to_gpu(out_data, ten_data, data_size);
-		else			cuda::copy_cpu_to_gpu(out_data, ten_data, data_size);
-	}
-	else
-	{
-		if (is_gpu())	cuda::copy_gpu_to_cpu(out_data, ten_data, data_size);
-		else						   memcpy(out_data, ten_data, data_size);
-	}
-
-	// If both have gradient copy it too.
-	if (has_grad() && with_grad)
-	{
-		void* ten_grad = _internals->gradient->_internals->_data;
-		void* out_grad = out._internals->gradient->_internals->_data;
-
-		if (out.is_gpu())
-		{
-			if (is_gpu())	cuda::copy_gpu_to_gpu(out_grad, ten_grad, data_size);
-			else			cuda::copy_cpu_to_gpu(out_grad, ten_grad, data_size);
-		}
-		else
-		{
-			if (is_gpu())	cuda::copy_gpu_to_cpu(out_grad, ten_grad, data_size);
-			else						   memcpy(out_grad, ten_grad, data_size);
-		}
-	}
-
-	// Return tensor.
-	return out;
-}
+// If it has gradient, returns a constant reference to the gradient tensor.
 
 const Tensor& Tensor::gradient() const
 {
@@ -822,6 +929,31 @@ const Tensor& Tensor::gradient() const
 	MACROGRAD_CHECK(has_grad(),
 		"Trying to get the gradient on an tensor with no gradient is not allowed."
 	);
+
+	// If the data does not have a gradient tensor create it.
+	if (!_internals->gradient)
+		_internals->gradient = new Tensor(_view, device(), false);
+
+	// Set the gradient view and offsets to your own.
+	_internals->gradient->_view = _view;
+	_internals->gradient->_stride = _stride;
+
+	// Return reference to its gradient tensor.
+	return *_internals->gradient;
+}
+
+// If has gradient, returns a reference to the gradient tensor.
+
+Tensor& Tensor::internal_gradient()
+{
+	// Sanity checks.
+	MACROGRAD_CHECK(has_grad(),
+		"Trying to get the gradient on an tensor with no gradient is not allowed."
+	);
+
+	// If the data does not have a gradient tensor create it.
+	if (!_internals->gradient)
+		_internals->gradient = new Tensor(_view, device(), false);
 
 	// Set the gradient view and offsets to your own.
 	_internals->gradient->_view = _view;
@@ -836,13 +968,35 @@ const Tensor& Tensor::gradient() const
 
 Tensor Tensor::no_grad() const
 {
+	MACROGRAD_CHECK(is_init(),
+		"Trying to call no_grad() on an uninitialized tensor is not allowed."
+	);
+
 	if (!has_grad())
 		return *this;
 
 	Tensor no_grad_tensor{ *this };
-	no_grad_tensor._is_no_grad = true;
+	no_grad_tensor._requires_grad = false;
 
 	return no_grad_tensor;
+}
+
+// Returns a tensor with the same data marked as having gradient, this enables the tensor
+// to participate in backpropatation, opposite to what no_grad() does.
+
+Tensor Tensor::with_grad() const
+{
+	MACROGRAD_CHECK(is_init(),
+		"Trying to call with_grad() on an uninitialized tensor is not allowed."
+	);
+
+	if (has_grad())
+		return *this;
+
+	Tensor with_grad_tensor{ *this };
+	with_grad_tensor._requires_grad = true;
+
+	return with_grad_tensor;
 }
 
 /*

@@ -11,11 +11,21 @@
 /* MACROGRAD ERROR CLASS HEADER
 --------------------------------------------------------------------------------------------------------------------------
 --------------------------------------------------------------------------------------------------------------------------
+ As part of a tensor library, it is important to provide clear error messages to easily pinpoint why a
+ program aborted. This is why this header contains a simple but powerful error class and a set of macros, 
+ which centralize error handling across Macrograd.
 
+ All functions along the library perform various validation checks like shape compatibility, device
+ compatibility, etc. All these checks trigger an error and abort if they fail. This prints a formatted
+ string to the console explaining the reason for the error, while also reporting the file and line where 
+ the error was detected.
 
+ The checks are always active regardless of the configuration. This is because diagnostics are always
+ necessary in tensor libraries, and they introduce almost insignificant overhead compared to the functions
+ that they guard.
 
-
-
+ The macros used for all checks and errors can be found at the end of this file. Feel free to use them in
+ your custom modules to funnel your own error detection through the same pipeline.
 --------------------------------------------------------------------------------------------------------------------------
 --------------------------------------------------------------------------------------------------------------------------
 */
@@ -31,25 +41,23 @@
 --------------------------------------------------------------------------------------------------------------------------
 */
 
-// Library error class. To be used by library functions to arise errors on the console
+// Library error class. To be used by library functions to raise errors on the console
 // and shut down the program. Stores the line and file where the error occurred and a 
-// message string, to be created using the macros.
+// message string. To be created using the error macros.
 class MacrogradError
 {
 public:
 	// Stores the error data and formats the string.
 	MacrogradError(unsigned line, const char* file, const char* fmt, ...)
-		: _line{ line }
+		: _line{ line }, _file{ file }
 	{
-		snprintf(_file, sizeof(_file), "%s", file);
-
 		va_list ap;
 		va_start(ap, fmt);
 		vsnprintf(_msg, sizeof(_msg), fmt, ap);
 		va_end(ap);
 	}
 
-	// Prints the error information on console and calls abort.
+	// Prints the error information to the console and calls abort.
 	[[noreturn]] void PrintAbort() const
 	{
 		fprintf(stderr,
@@ -63,8 +71,8 @@ public:
 	}
 
 private:
-	unsigned _line = 0u;	// Stores the line where the error ocurred.
-	char _file[512] = {};	// Stores the file where the error ocurred.
+	unsigned _line = 0u;	// Stores the line where the error occurred.
+	const char* _file;		// Stores the file where the error occurred.
 	char _msg[512] = {};	// Stores the message string of the error.
 };
 
