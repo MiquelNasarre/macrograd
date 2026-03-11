@@ -4,40 +4,50 @@
 #include "macrograd_nn.h"
 #include "macrograd_error.h"
 
-/* MNIST DATASET HELPER CLASS HEADER
--------------------------------------------------------------------------------------------------------
--------------------------------------------------------------------------------------------------------
-This class is a set of handy static functions to deal with the MNIST dataset.
-This is stored in files in the data/ folder of the project and contains a big
-set of training data for handwritten digits.
-
-This class is meant for easy manipulation of the data in such set. First,
-loadDataSet() should be called to load the files, and then you can easily 
-obtain a pointer to the images and labels, and training values for subsets.
--------------------------------------------------------------------------------------------------------
--------------------------------------------------------------------------------------------------------
+/* MNIST MACROGRAD TRAINING HEADER
+--------------------------------------------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------------------------------------------------
+ During the creation of Macrograd, since the moment it started being able to train I was
+ performing basic tests with this dataset. And since I didn't want to get rid of the file
+ here it is :)
+ 
+ The MNIST is a very well knonw dataset for basic ML applications, it consists of 60k 28x28
+ images of handritten digits, which serve as a fun dataset to play with and learn about MLPs
+ and convolutional networks. 
+  
+ This implementation uses a simple MLP of hidden layer sizes 128 and 64, and achieves test
+ set performances of +98% almost instantly, even in my tiny GPU which is nice. 
+ 
+ Feel free to read the implemetation and play with the parameters. If you want to see the 
+ actual images at the end of the training run you can see the model guesses on certain 
+ training set images, which are painted on console by the function MNIST::consolePrint.
+--------------------------------------------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------------------------------------------------
 */
 
-// Expected rows and columns to read from the dataset
+// Expected rows and columns to read from the dataset.
 
 #define IMG_ROWS 28u
 #define IMG_COLS 28u
 #define IMG_PIXELS (IMG_ROWS * IMG_COLS)
 
-// Paths for the MNIST files
+// Paths for the MNIST files.
 
-#define MNIST_TRAINING_IMAGES_PATH MNIST_PATH "train-images.idx3-ubyte"
-#define MNIST_TRAINING_LABELS_PATH MNIST_PATH "train-labels.idx1-ubyte"
-#define MNIST_TESTING_IMAGES_PATH MNIST_PATH "t10k-images.idx3-ubyte"
-#define MNIST_TESTING_LABELS_PATH MNIST_PATH "t10k-labels.idx1-ubyte"
+#define MNIST_TRAINING_IMAGES_PATH DATA_PATH "MNIST/train-images.idx3-ubyte"
+#define MNIST_TRAINING_LABELS_PATH DATA_PATH "MNIST/train-labels.idx1-ubyte"
+#define MNIST_TESTING_IMAGES_PATH DATA_PATH "MNIST/t10k-images.idx3-ubyte"
+#define MNIST_TESTING_LABELS_PATH DATA_PATH "MNIST/t10k-labels.idx1-ubyte"
 
-// Simple static class to handle the loading of the MNIST dataset for handwritten digits.
+// Simple static class to handle the loading of the MNIST dataset. It stores the datset 
+// directly as tensors of size (50k, IMAGE_DIM) and (10k, IMAGE_DIM). And stores the 
+// labels as VectorInts of the same lengths. 
 class MNIST
 {
 private:
+	// Static tensors to store images.
 	static inline Tensor trainingImages;
 	static inline Tensor testingImages;
-
+	// Static vectors to store labels.
 	static inline VectorInt trainingLabels;
 	static inline VectorInt testingLabels;
 
@@ -166,9 +176,10 @@ private:
 	}
 
 public:
+	// Public functions to load the dataset into the tensors before returning them.
 	static const Tensor getTrainingImages() { init_tensors(); return trainingImages; }
 	static const Tensor  getTestingImages() { init_tensors(); return  testingImages; }
-
+	// Public functions to load the labels into the vectors before returning them.
 	static const VectorInt getTrainingLabels() { init_tensors(); return trainingLabels; }
 	static const VectorInt  getTestingLabels() { init_tensors(); return  testingLabels; }
 
@@ -203,29 +214,37 @@ public:
 	}
 };
 
+// Simple linear class module implemetation. Defines a matrix and a bias. 
+// During forward pass does matrix multiplication with bias and returns.
 class Linear : public Module
 {
 private:
+	// Parameter storage for the module.
 	Tensor matrix;
 	Tensor bias;
 
+	// Bias boolean.
 	bool _has_bias;
 
 public:
-	Linear(unsigned in_dim, unsigned out_dim, bool has_bias = true, const char* device = "cpu") : _has_bias{ has_bias }
+	// Linear module constructor. Creates the tensors, initializes them 
+	// with kaiming uniform, and adds them to the parameter list.
+	Linear(unsigned in_dim, unsigned out_dim, bool has_bias = true) : _has_bias{ has_bias }
 	{
-		matrix = Tensor(Shape{ in_dim, out_dim }, device);
+		matrix = Tensor(Shape{ in_dim, out_dim });
 		Initialization::uniform(matrix, -sqrtf(6.f / in_dim), sqrtf(6.f / in_dim));
 		add_parameter(matrix);
-
+		// If requires bias create it.
 		if (has_bias)
 		{
-			bias = Tensor(Shape{ out_dim, }, device);
+			bias = Tensor(Shape{ out_dim, });
 			Initialization::uniform(bias, -sqrtf(1.f / in_dim), sqrtf(1.f / in_dim));
 			add_parameter(bias);
 		}
 	}
 
+	// Linear layer forward pass. Performs matrix multiplication.
+	// Bias addition is fused if specified during creation.
 	Tensor forward(const Tensor& in) const override
 	{
 		if (_has_bias)
@@ -234,11 +253,20 @@ public:
 	}
 };
 
+// Multi Layer Perceptron module class. Defines a stack of linear layers
+// of abitrary sizes with bias. During the forward pass performs the linear
+// passes followes by ReLU as the non-liniarity.
 class MLP : public Module
 {
+	// Linear module storage.
 	Linear** lins;
+
+	// Count of linear layers.
 	unsigned count;
 public:
+	// Templated constructor. Just for fun you can enter any arbitrary number of 
+	// layers and sizes and it will create that MLP, which is actually pretty 
+	// convenient. Initializes the layers and adds them to the parameter list. 
 	template<class... args>
 	MLP(args... fans)
 	{
@@ -255,6 +283,7 @@ public:
 		}
 	}
 
+	// Destructor. Deletes the layers.
 	~MLP()
 	{
 		for (unsigned i = 0; i < count; i++)
@@ -263,6 +292,7 @@ public:
 		delete[] lins;
 	}
 
+	// Runs the stack of linear layers, applying ReLU for the hidden layers.
 	Tensor forward(const Tensor& in) const override
 	{
 		Tensor out = in;
@@ -275,44 +305,69 @@ public:
 	}
 };
 
-static void run_mlp_training_run(int epochs = 10000, const char* device = "cuda", const char* load_path = nullptr)
+// Descriptor for the MLP training. Feel free to play with 
+// the parameters and try different training settings.
+struct MNISTTrainingDesc
 {
-	constexpr int train_size = 50000;
-	constexpr int test_size  = 10000;
-
-	Tensor train_data = MNIST::getTrainingImages().to(device);
-	Tensor  test_data = MNIST::getTestingImages().to(device);
-	VectorInt train_labels = MNIST::getTrainingLabels().to(device);
-	VectorInt  test_labels = MNIST::getTestingLabels().to(device);
-	// Clear CPU cache.
-	MNIST::resetTensors();
-
-	printf("MNIST loaded successfully!\n\n");
-
-	int log_every		= 10;
-	int batch_size		= 2048;
+	char device[16]     = "cuda";
+	char load_path[128] = "";
+	char save_path[128] = "my_mlp.mg";
+	int hidden0			= 128;
+	int hidden1			= 64;
+	int epochs          = 1000;
+	int log_every       = 10;
+	int batch_size      = 2048;
 	float initial_lr    = 0.100f;
 	float final_lr      = 0.010f;
 	float momentum      = 0.900f;
 	float weight_decay  = 0.005f;
+};
 
-	MLP mlp(IMG_PIXELS, 128, 64, 10); mlp.to(device);
-	if (load_path)
+// Trains an MLP on the MNIST dataset with the specified training parameters.
+// Uses a SGD optimizer and a CosineLR scheduler. Every epoch applies a random
+// permutation to the training data and trains on the entire set. During eval 
+// epochs it runs evaluation on the test set and prints to console.
+// At the end you can see some of the results of the trained model.
+static void run_mlp_training_run(MNISTTrainingDesc desc = {})
+{
+	// Expected train and test sizes.
+	constexpr int train_size = 50000;
+	constexpr int test_size  = 10000;
+
+	// Load datasets from files.
+	Tensor train_data = MNIST::getTrainingImages().to(desc.device);
+	Tensor  test_data = MNIST::getTestingImages().to(desc.device);
+	VectorInt train_labels = MNIST::getTrainingLabels().to(desc.device);
+	VectorInt  test_labels = MNIST::getTestingLabels().to(desc.device);
+	// Clear CPU cache.
+	MNIST::resetTensors();
+	printf("MNIST loaded successfully!\n\n");
+
+	// Initialize MLP and send to device.
+	MLP mlp(IMG_PIXELS, desc.hidden0, desc.hidden1, 10); 
+		mlp.to(desc.device);
+
+	// Load weights from file.
+	if (desc.load_path[0] != '\0')
 	{
-		mlp.load_weights(load_path);
-		printf("[ Weights correctly loaded from \"%s\" ]\n\n", load_path);
+		mlp.load_weights(desc.load_path);
+		printf("[ Weights correctly loaded from \"%s\" ]\n\n", desc.load_path);
 	}
 
-	Optimizer::SGD optimizer(mlp, momentum, initial_lr, weight_decay);
-	Scheduler::CosineLR scheduler(optimizer, initial_lr, final_lr, epochs);
+	// Create SGD otimizer and Cosine decay scheduler.
+	Optimizer::SGD optimizer(mlp, desc.momentum, desc.initial_lr, desc.weight_decay);
+	Scheduler::CosineLR scheduler(optimizer, desc.initial_lr, desc.final_lr, desc.epochs);
 
-	VectorInt randperm(0, train_size, 1, device);
+	// Create an aranged vector of training size for permutations.
+	VectorInt randperm(0, train_size, 1, desc.device);
 
-	for (int epoch = 1; epoch < epochs + 1; epoch++)
+	// Loop through epoch.
+	for (int epoch = 1; epoch < desc.epochs + 1; epoch++)
 	{
 		// Training set.
 		mlp.with_grad();
 		{
+			// Randomly permute images for this epoch.
 			Random::shuffle(randperm);
 			Tensor perm_train_data = train_data[randperm];
 			VectorInt perm_train_labels = train_labels[randperm];
@@ -322,7 +377,7 @@ static void run_mlp_training_run(int epochs = 10000, const char* device = "cuda"
 			{
 				// Generate input tensor.
 				start = end;
-				end = (train_size < start + batch_size) ? train_size : start + batch_size;
+				end = (train_size < start + desc.batch_size) ? train_size : start + desc.batch_size;
 
 				// Get input tensor.
 				Tensor in = perm_train_data.subset({ end - start }, { start });
@@ -341,16 +396,16 @@ static void run_mlp_training_run(int epochs = 10000, const char* device = "cuda"
 		}
 		// Test set evaluation.
 		mlp.no_grad();
-		if (epoch % log_every == 0)
+		if (epoch % desc.log_every == 0)
 		{
-			Tensor accum_loss({1}, device);
+			Tensor accum_loss({1}, desc.device);
 			int correct_count = 0u;
 			int start = 0u, end = 0u;
 			while (end < test_size)
 			{
 				// Generate input tensor.
 				start = end;
-				end = (test_size < start + batch_size) ? test_size : start + batch_size;
+				end = (test_size < start + desc.batch_size) ? test_size : start + desc.batch_size;
 
 				// Get input tensor.
 				Tensor in = test_data.subset({ end - start }, { start });
@@ -367,17 +422,19 @@ static void run_mlp_training_run(int epochs = 10000, const char* device = "cuda"
 				for (int v = 0; v < end - start; v++)
 					if (preds[v] == labels[v]) correct_count++;
 			}
+			// Report to console.
 			printf("Epoch %04u finished | Learning Rate: %.4f | Loss: %.4f | Accuracy: %.2f%%\n",
 				epoch, optimizer.learning_rate(), accum_loss.item() / test_size, (100.f * correct_count) / test_size
 			);
 		}
 	}
-	printf("\nFinished training MLP on MNIST for %i epoch.", epochs);
+	// Finished training :)
+	printf("\nFinished training MLP on MNIST for %i epoch.", desc.epochs);
 
 	
 	size_t seed; char c;
 	// --- Model showcase ---
-image_loop:
+	image_loop:
 	printf("\nDo you want to see a test set image? (y/n/s) ");
 	scanf_s(" %c", &c, 1);
 	if (c == 'y' || c == 'Y')
@@ -408,15 +465,9 @@ image_loop:
 		goto image_loop;
 	}
 	// --- Model weights saving ---
-	printf("\nDo you want to save the model weights? (y/n) ");
-	scanf_s(" %c", &c, 1);
-	if (c == 'y')
+	if (desc.save_path[0] != '\0')
 	{
-		char save_path[128];
-		printf("Specify a valid save path for the file: ");
-		scanf_s(" %127s", &save_path, 128);
-
-		mlp.save_weights(save_path);
-		printf("\n[ Weights successfully saved to \"%s\" ]\n", save_path);
+		mlp.save_weights(desc.save_path);
+		printf("\n\n[ Weights successfully saved to \"%s\" ]\n", desc.save_path);
 	}
 }

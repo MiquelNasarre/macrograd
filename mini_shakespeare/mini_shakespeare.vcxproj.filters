@@ -25,5 +25,14 @@
     <ClInclude Include="include\transformer.h">
       <Filter>Sources\Public</Filter>
     </ClInclude>
+    <ClInclude Include="include\tokenizer.h">
+      <Filter>Sources\Public</Filter>
+    </ClInclude>
+    <ClInclude Include="include\mini_shakespeare.h">
+      <Filter>Sources\Public</Filter>
+    </ClInclude>
+    <ClInclude Include="include\training.h">
+      <Filter>Sources\Public</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

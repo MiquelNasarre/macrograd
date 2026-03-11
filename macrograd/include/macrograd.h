@@ -182,7 +182,7 @@ public:
 	void set(int i, int val);
 	// Copies the indices from the pointer to the [a,b) range
 	// of the vector. This being a total of (b-a) elements.
-	void set(int a, int b, int* values);
+	void set(int a, int b, const int* values, bool is_gpu_ptr = false);
 
 	// Returns an element-wise copy of the vector in the specified device.
 	VectorInt to(const char* device) const;
@@ -266,6 +266,10 @@ namespace Random
 	// generating random permutations. On the CPU, it uses Fisher-Yates. On CUDA, it arranges random keys to 
 	// generate a permutation.
 	void shuffle(VectorInt& values);
+
+	// Sampling from probability distribution algorithm. Expects either a 1D tensor of probabilities or a 2D tensor 
+	// whose rows are probability distributions, it returns a VectorInt of random samples from those distributions.
+	VectorInt sample(const Tensor& probs);
 
 	// Returns a random float following a normal distribution with the specified mean and standard deviation.
 	float rand_normal(float mean, float std);
@@ -548,10 +552,6 @@ public:
 	// This includes CUDA pointers if the tensor is on CUDA.
 	float* internal_get_vector(const Shape& route);
 
-	// Returns a tensor containing the leading dimensions with the indices specified.
-	// It is useful for generating training set permutations but it does not support gradient.
-	Tensor operator[](const VectorInt& idxs) const;
-
 	// --- Copy functions ---
 	// These functions create new tensor data by copying the current tensor. They do not 
 	// define a gradient operation so they should not be used inside backpropagation.
@@ -625,7 +625,11 @@ public:
 
 	// Returns a tensor corresponding to the i-th row of the leading dimension. 
 	// The leading dimension is squeezed out. Supports negative indexing.
-	Tensor operator[](int i) const { return subset({1}, {i}).squeeze(0); }	
+	Tensor operator[](int i) const { return subset({1}, {i}).squeeze(0); }
+
+	// Returns a tensor containing the leading dimensions with the indices specified.
+	// It is useful for generating training set permutations and embeddings.
+	Tensor operator[](const VectorInt& idxs) const;
 
 	// --- Element/Row-wise Functions ---
 	// The following functions are methods that operate only on their own data. These 

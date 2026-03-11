@@ -11,61 +11,6 @@
 --------------------------------------------------------------------------------------------------------------------------
 */
 
-// Returns a tensor containing the leading dimensions with the indices specified.
-// It is useful for generating training set permutations but it does not support gradient.
-
-Tensor Tensor::operator[](const VectorInt& idxs) const
-{
-	MACROGRAD_CHECK(idxs.len(),
-		"Trying to use Tensor::operator[] with empty indices is not allowed."
-	);
-	MACROGRAD_CHECK(is_init(),
-		"Trying to use operator[] on an empty tensor is not allowed."
-	);
-	MACROGRAD_CHECK(idxs.is_gpu() == is_gpu(),
-		"Trying to call operator[] with indices and tensor in different devices."
-	);
-	MACROGRAD_CHECK(!has_grad(),
-		"Tensor::operator[] being called from a tensor that has gradient.\n"
-		"Backpropagation is not implemented for this operator, consider using subset() instead.\n"
-		"If you still want to use [] please call no_grad() right before to avoid this message."
-	);
-
-	// Create shape with leading dimension changed.
-	Shape out_shape = _view;
-	out_shape[0] = idxs.len();
-
-	// Initialize output tensor.
-	Tensor out(out_shape, device(), false);
-
-	// Extract relevant data.
-	const int* idxs_data = idxs.data();
-	unsigned length = idxs.len();
-	unsigned size0 = _view[0];
-	unsigned stride = _stride[0];
-	float* out_data = out.internal_data();
-	const float* ten_data = internal_data();
-
-	// Now let's indexate this tensor.
-	if (out.is_gpu())
-		kernel_ops::tensor_bracket_op(out_data, ten_data, idxs_data, length, stride, size0);
-	else
-	{
-		// Iterate through the indices and memcpy.
-		for (unsigned i = 0; i < length; i++)
-		{
-			int idx = idxs_data[i];
-			MACROGRAD_CHECK(idx >= 0 && (unsigned)idx < size0,
-				"Idx out of bounds find during an operator [] call.\n"
-				"Make sure your indices are in the range [0, size(0) - 1]. Idx found: %i", idx
-			);
-			memcpy(out_data + stride * i, ten_data + stride * idx, stride * sizeof(float));
-		}
-	}
-	// Return the tensor.
-	return out;
-}
-
 // The tensor values are incremented by a floating value stored in a pointer times a factor.
 // The pointer can be a CUDA pointer to avoid the need for synchronization or data transfers.
 
@@ -1038,6 +983,83 @@ Tensor Tensor::repeat(int dim, unsigned repetitions) const
 		out._internals->op = new RepOp(*this, out, dim);
 
 	// Return out.
+	return out;
+}
+
+// Returns a tensor containing the leading dimensions with the indices specified.
+// It is useful for generating training set permutations and embeddings.
+
+Tensor Tensor::operator[](const VectorInt& idxs) const
+{
+	// Permutation tensor operator for backpropagation.
+	class PermOp : public Tensor::TensorInternals::TensorOp
+	{
+		// Tensor copy storage for the input and one-hot table.
+		Tensor in, one_hot;
+
+	public:
+		// Constructor, stores all the data of the operation.
+		PermOp(const Tensor& _in, const Tensor& _one_hot, const Tensor& _out) : TensorOp{ "Permutation", _out },
+			in{ _in }, one_hot{ _one_hot }
+		{
+			_relatives[0] = &in;
+		}
+
+		// Backpropagation. Matmul by the transposed one hot encoder. grad += OH^T @ out.grad.
+		void _backward() override
+		{
+			in.internal_gradient() += Functional::matmul(one_hot, out.gradient(), true, false);
+		}
+	};
+
+	// Sanity checks.
+	MACROGRAD_CHECK(idxs.len(),
+		"Trying to use Tensor::operator[] with empty indices is not allowed."
+	);
+	MACROGRAD_CHECK(is_init(),
+		"Trying to use operator[] on an empty tensor is not allowed."
+	);
+	MACROGRAD_CHECK(idxs.is_gpu() == is_gpu(),
+		"Trying to call operator[] with indices and tensor in different devices."
+	);
+
+	// Create shape with leading dimension changed.
+	Shape out_shape = _view;
+	out_shape[0] = idxs.len();
+
+	// Initialize output tensor.
+	Tensor out(out_shape, device(), has_grad());
+
+	// Extract relevant data.
+	const int* idxs_data = idxs.data();
+	unsigned length = idxs.len();
+	unsigned size0 = _view[0];
+	unsigned stride = _stride[0];
+	float* out_data = out.internal_data();
+	const float* ten_data = internal_data();
+
+	// Now let's indexate this tensor.
+	if (out.is_gpu())
+		kernel_ops::tensor_bracket_op(out_data, ten_data, idxs_data, length, stride, size0);
+	else
+	{
+		// Iterate through the indices and memcpy.
+		for (unsigned i = 0; i < length; i++)
+		{
+			int idx = idxs_data[i];
+			MACROGRAD_CHECK(idx >= 0 && (unsigned)idx < size0,
+				"Idx out of bounds find during an operator [] call.\n"
+				"Make sure your indices are in the range [0, size(0) - 1]. Idx found: %i", idx
+			);
+			memcpy(out_data + stride * i, ten_data + stride * idx, stride * sizeof(float));
+		}
+	}
+
+	// If it was a gradient operation store a PermOp instance. Send data with changed view to allow matmul.
+	if (has_grad())
+		out._internals->op = new PermOp((*this).view({ size0, stride }), Functional::one_hot(idxs, size0), out.view({ length, stride }));
+
+	// Return the tensor.
 	return out;
 }
 
@@ -5544,6 +5566,65 @@ void Random::shuffle(VectorInt& values)
 		data[i - 1] = data[j];
 		data[j] = tmp;
 	}
+}
+
+// Sampling from probability distribution algorithm. Expects either a 1D tensor of probabilities or a 2D tensor 
+// whose rows are probability distributions, it returns a VectorInt of random samples from those distributions.
+
+VectorInt Random::sample(const Tensor& probs)
+{
+	// Make sure the tensor has no more that 2 dimensions.
+	MACROGRAD_CHECK(probs.dim() == 2 || probs.dim() == 1,
+		"Invalid tensor received for a random sampling call, only 1/2-Dimensional tensors are allowed."
+	);
+	MACROGRAD_CHECK(probs.size(-1) != 0,
+		"Invalid tenosr received for a random sampling call, zero classes are not allowed."
+	);
+
+	// Get the number of cases and the number of classes.
+	unsigned num_cases = (probs.dim() == 1) ? 1 : probs.size(0);
+	unsigned num_classes = probs.size(-1);
+
+	// Create the output vector.
+	VectorInt out(num_cases, probs.device());
+
+	// If there is no cases you are done.
+	if (!num_cases) return out;
+
+	// Extract the data.
+	const float* probs_data = probs.internal_data();
+	int* out_data = out.data();
+
+	// Now create the random sampling.
+	if (out.is_gpu())
+		kernel_ops::sample(out_data, probs_data, num_cases, num_classes);
+
+	else for (unsigned i = 0; i < num_cases; i++)
+	{
+		// Generate a random number between 0 and 1.
+		float rand = random_0_1();
+		float acc = 0.0f;
+
+		// Get the pointer to this case probabilities.
+		const float* case_probs = probs_data + i * num_classes;
+
+		// Set fallback for float approximations or incorrect probs.
+		out_data[i] = (int)(num_classes - 1);
+
+		// Iterate through probabilities until you hit the correct range.
+		for (unsigned p = 0; p < num_classes; p++) 
+		{
+			acc += case_probs[p];
+			if (acc > rand)
+			{
+				out_data[i] = (int)p;
+				break;
+			}
+		}
+	}
+
+	// Return output vector.
+	return out;
 }
 
 // Returns a random float following a normal distribution with the specified mean and standard deviation.

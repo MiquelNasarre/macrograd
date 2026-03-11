@@ -280,16 +280,16 @@ VectorInt VectorInt::to(const char* device) const
 	if (_internals->_is_gpu)
 	{
 		if (out._internals->_is_gpu)
-			cuda::copy_gpu_to_gpu(out._internals->_data, (int*)_internals->_data + _offset, _length * sizeof(int));
+			cuda::copy_gpu_to_gpu(out.data(), data(), _length * sizeof(int));
 		else
-			cuda::copy_gpu_to_cpu(out._internals->_data, (int*)_internals->_data + _offset, _length * sizeof(int));
+			cuda::copy_gpu_to_cpu(out.data(), data(), _length * sizeof(int));
 	}
 	else
 	{
 		if (out._internals->_is_gpu)
-			cuda::copy_cpu_to_gpu(out._internals->_data, (int*)_internals->_data + _offset, _length * sizeof(int));
+			cuda::copy_cpu_to_gpu(out.data(), data(), _length * sizeof(int));
 		else
-			memcpy(out._internals->_data, (int*)_internals->_data + _offset, _length * sizeof(int));
+			memcpy(out.data(), data(), _length * sizeof(int));
 	}
 
 	return out;
@@ -350,12 +350,12 @@ int& VectorInt::operator[](int i)
 	MACROGRAD_CHECK(_internals,
 		"Operator [] on an empty VectorInt is not allowed"
 	);
-	MACROGRAD_CHECK(!_internals->_is_gpu,
+	MACROGRAD_CHECK(!is_gpu(),
 		"Operator [] on a GPU VectorInt is not allowed"
 	);
 
 	int idx = mod(i, (int)_length);
-	return ((int*)_internals->_data + _offset)[idx];
+	return data()[idx];
 }
 
 // Access operator, returns a reference to the corresponding element of 
@@ -367,12 +367,12 @@ const int& VectorInt::operator[](int i) const
 	MACROGRAD_CHECK(_internals,
 		"Operator [] on an empty VectorInt is not allowed"
 	);
-	MACROGRAD_CHECK(!_internals->_is_gpu,
+	MACROGRAD_CHECK(!is_gpu(),
 		"Operator [] on a GPU VectorInt is not allowed"
 	);
 
 	int idx = mod(i, (int)_length);
-	return ((int*)_internals->_data + _offset)[idx];
+	return data()[idx];
 }
 
 // Returns the integer at the i-th position in the vector. 
@@ -386,8 +386,8 @@ int VectorInt::get(int i) const
 
 	int idx = mod(i, (int)_length);
 	int val;
-	if (_internals->_is_gpu) cuda::copy_gpu_to_cpu(&val, (int*)_internals->_data + _offset + idx, sizeof(int));
-	else val = ((int*)_internals->_data + _offset)[idx];
+	if (is_gpu()) cuda::copy_gpu_to_cpu(&val, data() + idx, sizeof(int));
+	else val = data()[idx];
 
 	return val;
 }
@@ -403,14 +403,14 @@ void VectorInt::set(int i, int val)
 
 	int idx = mod(i, (int)_length);
 
-	if (_internals->_is_gpu) cuda::copy_cpu_to_gpu((int*)_internals->_data + _offset + idx, &val, sizeof(int));
-	else ((int*)_internals->_data + _offset)[idx] = val;
+	if (is_gpu()) cuda::copy_cpu_to_gpu(data() + idx, &val, sizeof(int));
+	else data()[idx] = val;
 }
 
 // Copies the indices from the pointer to the [a,b) range
 // of the vector. This being a total of (b-a) elements.
 
-void VectorInt::set(int a, int b, int* values)
+void VectorInt::set(int a, int b, const int* values, bool is_gpu_ptr)
 {
 	MACROGRAD_CHECK(_internals,
 		"Set function on an empty VectorInt is not allowed"
@@ -427,10 +427,21 @@ void VectorInt::set(int a, int b, int* values)
 	if (idx_a == idx_b)
 		return;
 
-	if (is_gpu()) 
-		cuda::copy_cpu_to_gpu((int*)_internals->_data + _offset + idx_a, values, (idx_b - idx_a) * sizeof(int));
-	else 
-		memcpy((int*)_internals->_data + _offset + idx_a, values, (idx_b - idx_a) * sizeof(int));
+	if (is_gpu())
+	{
+		if (is_gpu_ptr)
+			cuda::copy_gpu_to_gpu(data() + idx_a, values, (idx_b - idx_a) * sizeof(int));
+		else
+			cuda::copy_cpu_to_gpu(data() + idx_a, values, (idx_b - idx_a) * sizeof(int));
+	}
+	else
+	{
+		if (is_gpu_ptr)
+			cuda::copy_gpu_to_cpu(data() + idx_a, values, (idx_b - idx_a) * sizeof(int));
+		else
+			memcpy(data() + idx_a, values, (idx_b - idx_a) * sizeof(int));
+	}
+		
 }
 
 // Returns a view of the current vector with its elements in the range [a,b).
@@ -468,9 +479,9 @@ VectorInt VectorInt::copy() const
 	VectorInt out(_length, _internals->_device);
 
 	if (_internals->_is_gpu)
-		cuda::copy_gpu_to_gpu(out._internals->_data, (int*)_internals->_data + _offset, _length * sizeof(int));
+		cuda::copy_gpu_to_gpu(out.data(), data(), _length * sizeof(int));
 	else
-		memcpy(out._internals->_data, (int*)_internals->_data + _offset, _length * sizeof(int));
+		memcpy(out.data(), data(), _length * sizeof(int));
 
 	return out;
 }

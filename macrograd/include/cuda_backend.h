@@ -138,6 +138,7 @@ namespace kernel_ops
 	void normal(void* data_ptr, float mean, float std, size_t num_elements);
 	void uniform(void* data_ptr, float min, float max, size_t num_elements);
 	void shuffle(void* values, size_t length);
+	void sample(void* out_data, const void* probs_data, size_t num_cases, size_t num_classes);
 	void arange(void* data_ptr, int a, int stride, size_t count);
 
 	// --- Row-Wise Operators ---

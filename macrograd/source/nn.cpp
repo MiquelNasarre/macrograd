@@ -35,7 +35,8 @@ void Module::add_parameter(Tensor& tensor)
 		"Make sure your tensors are properly initialized before adding them as parameters."
 	);
 	// Force gradient into the tensor.
-	tensor = tensor.with_grad();
+	if (_requires_grad)
+		tensor = tensor.with_grad();
 
 	// Create new tensor list.
 	Tensor** new_parameters = new Tensor*[_parameter_count + 1];
@@ -58,6 +59,8 @@ void Module::no_grad()
 {
 	for (unsigned i = 0; i < _parameter_count; i++)
 		*_parameters[i] = _parameters[i]->no_grad();
+
+	_requires_grad = false;
 }
 
 // Enables gradients for all parameters in the module. Forward
@@ -67,6 +70,8 @@ void Module::with_grad()
 {
 	for (unsigned i = 0; i < _parameter_count; i++)
 		*_parameters[i] = _parameters[i]->with_grad();
+
+	_requires_grad = true;
 }
 
 // Sets all parameter gradients to zero.
@@ -83,6 +88,8 @@ void Module::to(const char* device)
 {
 	for (unsigned i = 0; i < _parameter_count; i++)
 		*_parameters[i] = _parameters[i]->to(device, true);
+
+	strcpy_s(_device, 16, device);
 }
 
 /*

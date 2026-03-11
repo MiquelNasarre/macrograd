@@ -114,12 +114,12 @@ public:
         K = K.view({ B, L, n_heads, -1 }).transpose(1, 2); // (B, h, L, dH)
         V = V.view({ B, L, n_heads, -1 }).transpose(1, 2); // (B, h, L, dH)
 
-        // Generate attention scores.
-        Tensor scores = Functional::matmul(Q, K, false, true) / sqrtf((float)head_dim); // (B, h, L, L)
-
-        // Apply mask.
+        // Generate attention scores. Fuse with mask if exists.
+        Tensor scores;
         if (mask.is_init())
-            scores += mask; // (B, h, L, L)
+            scores = Functional::matmul(Q / sqrtf((float)head_dim), K, mask, false, true); // (B, h, L, L)
+        else
+            scores = Functional::matmul(Q / sqrtf((float)head_dim), K, false, true); // (B, h, L, L)
 
         // Get attention weights
         Tensor weights = scores.softmax(-1);
@@ -195,7 +195,7 @@ private:
     LayerNorm ff_norm;
 
 public:
-    Layer(unsigned emb_dim, unsigned n_heads, unsigned ff_dim) :
+    Layer(unsigned n_heads, unsigned emb_dim, unsigned ff_dim) :
         attention{ n_heads, emb_dim },
         attn_norm{ emb_dim },
         feed_forward{ emb_dim, ff_dim },
@@ -236,14 +236,14 @@ private:
     unsigned n_layers;
 
 public:
-    Transformer(unsigned num_layers, unsigned emb_dim, unsigned n_heads, unsigned ff_dim)
+    Transformer(unsigned num_layers, unsigned n_heads, unsigned emb_dim, unsigned ff_dim)
     {
         n_layers = num_layers;
         layer = new Layer*[num_layers];
 
         for (unsigned i = 0; i < n_layers; i++)
         {
-            layer[i] = new Layer(emb_dim, n_heads, ff_dim);
+            layer[i] = new Layer(n_heads, emb_dim, ff_dim);
             add_module(*layer[i]);
         }
     }
@@ -273,5 +273,79 @@ public:
 
         // Return final tensor.
         return ten;
+    }
+};
+
+class Embedding : public Module
+{
+private:
+    Tensor lookup_table;
+    unsigned emb_dim;
+    unsigned num_tokens;
+
+public:
+    Embedding(unsigned _num_tokens, unsigned _emb_dim) :
+        num_tokens{ _num_tokens },
+        emb_dim{ _emb_dim }
+    {
+        lookup_table = Tensor({ num_tokens, emb_dim });
+        Initialization::normal(lookup_table, 0.0f, 0.02f);
+        add_parameter(lookup_table);
+    }
+
+    Tensor embed(const VectorInt* tokens, unsigned batch_size) const
+    {
+        MACROGRAD_CHECK(batch_size != 0,
+            "Batch size 0 is not allowed in the embedding."
+        );
+
+        Tensor embedded = lookup_table[tokens[0]].unsqueeze(0);
+
+        for (unsigned i = 1; i < batch_size; i++)
+            embedded = Functional::cat(embedded, lookup_table[tokens[i]].unsqueeze(0), 0);
+
+        return embedded;
+    }
+
+    Tensor unembed(const Tensor& trans_out)
+    {
+        // Multiply by transposed embeddings to obtain logits.
+        Tensor logits = Functional::matmul(trans_out, lookup_table, false, true);
+
+        // Return logits.
+        return logits;
+    }
+};
+
+class PositionalEmbedding : public Module
+{
+private:
+    Tensor embedding;
+
+    unsigned max_length;
+public:
+    PositionalEmbedding(unsigned max_context_length, unsigned emb_dim):
+        max_length{ max_context_length }
+    {
+        embedding = Tensor({ max_context_length, emb_dim });
+        Initialization::normal(embedding, 0.0f, 0.02f);
+        add_parameter(embedding);
+    }
+
+    Tensor forward(const Tensor& token_emb) const override
+    {
+        MACROGRAD_CHECK(token_emb.size(1) <= max_length,
+            "Incorrect tensor received for a positional embedding addition.\n" 
+            "Maximum context length is %u but found tensor with shape %s", max_length, token_emb.shape().str()
+        );
+
+        // Prepare embedding.
+        Tensor embedding_subset = embedding.subset({ token_emb.size(1) }, {});
+
+        // Add embedding.
+        Tensor out = token_emb + embedding_subset;
+
+        // Return output.
+        return out;
     }
 };

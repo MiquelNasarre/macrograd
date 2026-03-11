@@ -58,6 +58,12 @@ private:
 	unsigned _parameter_count = 0;	// Stores the module's paramenter count.
 	Tensor** _parameters = nullptr;	// Stores a pointer to the module's parameters.
 
+	// Whether the parameters require gradient.
+	bool _requires_grad = true;
+
+	// Device where the parameters are stored.
+	char _device[16] = "cpu";
+
 	// No module copies are allowed.
 	Module(const Module& other) = delete;
 	virtual Module& operator=(const Module& other) = delete;
@@ -79,6 +85,9 @@ protected:
 	void add_parameter(Tensor& tensor);
 
 public:
+	// Whether the module's parameters have gradient enabled.
+	virtual bool has_grad() const { return _requires_grad; }
+
 	// Disables gradients for all parameters in the module. Forward
 	// passes executed afterwards will not create a gradient tree.
 	virtual void no_grad();
@@ -107,6 +116,9 @@ public:
 
 	// Returns the number of parameters in the internal parameter list.
 	unsigned get_parameter_count() const { return _parameter_count;	}
+
+	// Returns device where the parameters are stored.
+	const char* device() const { return _device; }
 
 public:
 	// Save/load weight functions. These allow the user to store the model weights at 

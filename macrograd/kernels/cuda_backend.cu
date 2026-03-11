@@ -1760,6 +1760,53 @@ void kernel_ops::shuffle(void* values, size_t length)
     MemPool::free(d_keys);
 }
 
+__global__ void sampling_kernel(int* __restrict__ out, const float* __restrict__ probs, const float* __restrict__ values, size_t n_cases, size_t n_classes)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n_cases)
+        return;
+
+    const float val = values[idx];
+    const float* case_probs = probs + idx * n_classes;
+    float acc = 0.0f;
+
+    for (size_t i = 0; i < n_classes; i++)
+    {
+        acc += case_probs[i];
+        if (acc > val) 
+        {
+            out[idx] = (int)i;
+            return;
+        }
+    }
+    // Fallback.
+    out[idx] = n_classes - 1;
+}
+void kernel_ops::sample(void* out_data, const void* probs_data, size_t num_cases, size_t num_classes)
+{
+    // Allocate some space for the random values.
+    float* rand = (float*)MemPool::allocate(num_cases * sizeof(float));
+
+    // Generate random values.
+    CURAND_CHECK(curandGenerateUniform(rng::generator(), rand, num_cases));
+
+    // Decide on block and grid size.
+    const int BLOCK_SIZE = DEFAULT_BLOCK_SIZE;
+    const int grid_size = int((num_cases + BLOCK_SIZE - 1) / BLOCK_SIZE);
+
+    // Launch kernel.
+    CUDA_LAUNCH(sampling_kernel, grid_size, BLOCK_SIZE,
+        (int*)out_data,
+        (const float*)probs_data,
+        (const float*)rand,
+        num_cases, num_classes
+    );
+    CUDA_CHECK(cudaGetLastError());
+
+    // Free random values.
+    MemPool::free(rand);
+}
+
 __global__ void fast_arange_kernel(int* data, int a, int stride, size_t count)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
