@@ -52,13 +52,39 @@ inline T __shfl_down_sync(unsigned, T x, int) { return x; }
 // Global Stream class.
 class stream
 {
+    friend void Cuda::set_device(int);
 private:
-    static inline cudaStream_t create() { cudaStream_t s; CUDA_CHECK(cudaStreamCreateWithFlags(&s, cudaStreamNonBlocking)); return s; }
+    // Current device storage.
+    static int current_device;
+
+    // Pointer to device streams for every device.
+    static inline cudaStream_t* init_pointer()
+    {
+        int device_count = Cuda::device_count();
+        cudaStream_t* device_streams = new cudaStream_t[device_count];
+        for (int i = 0; i < device_count; i++)
+            device_streams[i] = nullptr;
+        
+        return device_streams;
+    }
+
 public:
-    // Global stream used by all ops.
-    static inline cudaStream_t get() { static thread_local cudaStream_t s = create(); return s; }
+    // Global device stream used by all ops.
+    static inline cudaStream_t get() 
+    { 
+        static cudaStream_t* device_streams = init_pointer();
+        
+        if (!device_streams[current_device])
+            CUDA_CHECK(cudaStreamCreateWithFlags(&device_streams[current_device], cudaStreamNonBlocking));
+
+        return device_streams[current_device];
+    }
 };
 
+// Static variable initialization.
+int stream::current_device = Cuda::current_device();
+
+// Device class to get current device sm count.
 class device
 {
 private:
@@ -76,9 +102,10 @@ private:
         return sm;
     }
 public:
-    static int sm_count()
+    static int sm_count(bool recompute = false)
     {
         static int value = count();
+        if (recompute) value = count();
         return value;
     }
 };
@@ -89,12 +116,38 @@ public:
 --------------------------------------------------------------------------------------------------------------------------
 */
 
+// Sets initial release threshold on device.
+
+void MemPool::init_threshold()
+{
+    static bool is_init = false;
+    if (is_init)
+        return;
+    is_init = true;
+
+    int device_idx = Cuda::current_device();
+
+    // Make sure memory pooling is supported on this device.
+    cudaDeviceProp prop = {};
+    CUDA_CHECK(cudaGetDeviceProperties(&prop, device_idx));
+    if (!prop.memoryPoolsSupported)
+        return;
+
+    // Get the default memory pool.
+    cudaMemPool_t pool = nullptr;
+    CUDA_CHECK(cudaDeviceGetDefaultMemPool(&pool, device_idx));
+
+    // Set new threshold.
+    uint64_t threshold = uint64_t(initial_release_threshold * prop.totalGlobalMem);
+    CUDA_CHECK(cudaMemPoolSetAttribute(pool, cudaMemPoolAttrReleaseThreshold, &threshold));
+}
+
 // Get your free GPU memory here! Freshly zeroed!
 
 void* MemPool::allocate(size_t byte_size)
 {
     if (!byte_size) return nullptr;
-
+    init_threshold();
     void* data_ptr = nullptr;
     CUDA_CHECK(cudaMallocAsync(&data_ptr, byte_size, stream::get()));
     CUDA_CHECK(cudaMemsetAsync(data_ptr, 0, byte_size, stream::get()));
@@ -111,20 +164,200 @@ void MemPool::free(void* data_ptr)
 
 /*
 --------------------------------------------------------------------------------------------------------------------------
- Other functions
+ User Cuda Namespace
+--------------------------------------------------------------------------------------------------------------------------
+*/
+
+// Returns whether a CUDA device is available for usage.
+
+bool Cuda::is_available()
+{
+    int count = 0;
+    cudaError_t err = cudaGetDeviceCount(&count);
+    if (err != cudaSuccess)
+    {
+        cudaGetLastError();
+        return false;
+    }
+    return (count > 0);
+}
+
+// Returns the number of CUDA devices available.
+
+int Cuda::device_count()
+{
+    // Get device count.
+    int count = 0;
+    CUDA_CHECK(cudaGetDeviceCount(&count));
+
+    // Return device count.
+    return count;
+}
+
+// Returns the memory capacity of the specified device.
+
+unsigned long long Cuda::device_memory(int device_idx)
+{
+    if (device_idx == -1)
+        device_idx = current_device();
+
+    // Get device memory from properties.
+    cudaDeviceProp prop = {};
+    CUDA_CHECK(cudaGetDeviceProperties(&prop, device_idx));
+
+    // Return global memory.
+    return prop.totalGlobalMem;
+}
+
+// Returns a string containing the specified device name.
+
+const char* Cuda::device_name(int device_idx)
+{
+    if (device_idx == -1)
+        device_idx = current_device();
+
+    // If you have more than 32 GPU you should definately not use this library XD.
+    static thread_local char buffer[32][256] = {};
+    static unsigned next = 0;
+
+    // Get name from properties.
+    cudaDeviceProp prop = {};
+    CUDA_CHECK(cudaGetDeviceProperties(&prop, device_idx));
+
+    // Copy name to buffer and return.
+    snprintf(buffer[next % 32], 256, "%s", prop.name);
+    return buffer[next++ % 32];
+}
+
+// Sets the maximum allocated memory the memory pool is allowed to reserve. Memory will still
+// overflow if operations are bigger than the threshold. Defaults to 0.9, if your training uses 
+// a higher fraction of the total GPU memory consider increasing this threshold.
+
+void Cuda::set_release_threshold(float fraction, int device_idx)
+{
+    if (device_idx == -1)
+        device_idx = current_device();
+
+    // Sanity check.
+    MACROGRAD_CHECK(fraction >= 0.0f && fraction <= 1.0f,
+        "Invalid allocation threshold found for a set allocation CUDA call.\n"
+        "Make sure your threshold is between 0 and 1. Found fraction %.2f", fraction
+    );
+
+    // Make sure memory pooling is supported on this device.
+    cudaDeviceProp prop = {};
+    CUDA_CHECK(cudaGetDeviceProperties(&prop, device_idx));
+
+    MACROGRAD_CHECK(prop.memoryPoolsSupported,
+        "Trying to set allocation threshold on a device thad does not support memory pooling."
+    );
+
+    // Get the default memory pool.
+    cudaMemPool_t pool = nullptr;
+    CUDA_CHECK(cudaDeviceGetDefaultMemPool(&pool, device_idx));
+
+    // Set new threshold.
+    uint64_t threshold = uint64_t(fraction * prop.totalGlobalMem);
+    CUDA_CHECK(cudaMemPoolSetAttribute(pool, cudaMemPoolAttrReleaseThreshold, &threshold));
+}
+
+// Return the idx of the current device used by the library.
+
+int Cuda::current_device()
+{
+    // Get device idx.
+    int dev = 0;
+    CUDA_CHECK(cudaGetDevice(&dev));
+
+    // Return device idx.
+    return dev;
+}
+
+// Sets the device to be used by the library.
+
+void Cuda::set_device(int device_idx)
+{
+    // Set device to the one specified.
+    CUDA_CHECK(cudaSetDevice(device_idx));
+
+    // Recpmpute sm_count for kernel launches.
+    device::sm_count(true);
+
+    // Set device for stream.
+    stream::current_device = device_idx;
+}
+
+// Synchronizes the current CUDA stream with the CPU runtime.
+
+void Cuda::synchronize()
+{
+    cuda_methods::synchronize();
+}
+
+// Returns the memory being reserved by the default memory pool.
+
+unsigned long long Cuda::reserved_memory(int device_idx)
+{
+    if (device_idx == -1)
+        device_idx = current_device();
+
+    // Make sure memory pooling is supported on this device.
+    cudaDeviceProp prop = {};
+    CUDA_CHECK(cudaGetDeviceProperties(&prop, device_idx));
+    MACROGRAD_CHECK(prop.memoryPoolsSupported,
+        "Trying to set reserved memory on a device thad does not support memory pooling."
+    );
+
+    // Get the device's memory pool.
+    cudaMemPool_t pool = nullptr;
+    CUDA_CHECK(cudaDeviceGetDefaultMemPool(&pool, device_idx));
+
+    // Check reserved memory and return.
+    unsigned long long reserved;
+    CUDA_CHECK(cudaMemPoolGetAttribute(pool, cudaMemPoolAttrReservedMemCurrent, &reserved));
+    return reserved;
+}
+
+// Returns the memory being actively used by the library.
+
+unsigned long long Cuda::used_memory(int device_idx)
+{
+    if (device_idx == -1)
+        device_idx = current_device();
+
+    // Make sure memory pooling is supported on this device.
+    cudaDeviceProp prop = {};
+    CUDA_CHECK(cudaGetDeviceProperties(&prop, device_idx));
+    MACROGRAD_CHECK(prop.memoryPoolsSupported,
+        "Trying to set reserved memory on a device thad does not support memory pooling."
+    );
+
+    // Get the device's memory pool.
+    cudaMemPool_t pool = nullptr;
+    CUDA_CHECK(cudaDeviceGetDefaultMemPool(&pool, device_idx));
+
+    // Check used memory and return.
+    unsigned long long used;
+    CUDA_CHECK(cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemCurrent, &used));
+    return used;
+}
+
+/*
+--------------------------------------------------------------------------------------------------------------------------
+ Internal Cuda Methods Namespace
 --------------------------------------------------------------------------------------------------------------------------
 */
 
 // Sets the data to zero for the specified byte size.
 
-void cuda::zero_data(void* data_ptr, size_t byte_size)
+void cuda_methods::zero_data(void* data_ptr, size_t byte_size)
 {
     CUDA_CHECK(cudaMemsetAsync(data_ptr, 0, byte_size, stream::get()));
 }
 
 // Copies the data from the CPU pointer to the GPU pointer.
 
-void cuda::copy_cpu_to_gpu(void* gpu_data_ptr, const void* cpu_data_ptr, size_t byte_size)
+void cuda_methods::copy_cpu_to_gpu(void* gpu_data_ptr, const void* cpu_data_ptr, size_t byte_size)
 {
     CUDA_CHECK(cudaMemcpyAsync(gpu_data_ptr, cpu_data_ptr, byte_size, cudaMemcpyHostToDevice, stream::get()));
     CUDA_CHECK(cudaStreamSynchronize(stream::get()));
@@ -132,7 +365,7 @@ void cuda::copy_cpu_to_gpu(void* gpu_data_ptr, const void* cpu_data_ptr, size_t 
 
 // Copies the data from the GPU pointer to the CPU pointer.
 
-void cuda::copy_gpu_to_cpu(void* cpu_data_ptr, const void* gpu_data_ptr, size_t byte_size)
+void cuda_methods::copy_gpu_to_cpu(void* cpu_data_ptr, const void* gpu_data_ptr, size_t byte_size)
 {
     CUDA_CHECK(cudaMemcpyAsync(cpu_data_ptr, gpu_data_ptr, byte_size, cudaMemcpyDeviceToHost, stream::get()));
     CUDA_CHECK(cudaStreamSynchronize(stream::get()));
@@ -140,21 +373,21 @@ void cuda::copy_gpu_to_cpu(void* cpu_data_ptr, const void* gpu_data_ptr, size_t 
 
 // Copies data from one GPU poiner to another GPU pointer.
 
-void cuda::copy_gpu_to_gpu(void* dst_ptr, const void* src_ptr, size_t byte_size)
+void cuda_methods::copy_gpu_to_gpu(void* dst_ptr, const void* src_ptr, size_t byte_size)
 {
     CUDA_CHECK(cudaMemcpyAsync(dst_ptr, src_ptr, byte_size, cudaMemcpyDeviceToDevice, stream::get()));
 }
 
 // Waits until global stream is done.
 
-void cuda::synchronize()
+void cuda_methods::synchronize()
 {
     CUDA_CHECK(cudaStreamSynchronize(stream::get()));
 }
 
 // Set gradient element value to one for backprop.
 
-void cuda::set_to_one(void* data_ptr)
+void cuda_methods::set_to_one(void* data_ptr)
 {
     static float one = 1.f;
     CUDA_CHECK(cudaMemcpyAsync(data_ptr, &one, sizeof(float), cudaMemcpyHostToDevice, stream::get()));
@@ -3067,7 +3300,7 @@ void kernel_ops::modify(const Shape& out_shape, const Shape& in_shape, const Sha
     
     // If just copying memory just copy memory.
     if (!injection_count)
-        cuda::copy_gpu_to_gpu(out_data, in_data, stride * sizeof(float));
+        cuda_methods::copy_gpu_to_gpu(out_data, in_data, stride * sizeof(float));
 
     // If only expanding once use a 2D memcpy.
     else if (injection_count == 1)
@@ -3784,8 +4017,8 @@ void kernel_ops::cat(void* out_data, const void* in0_data, const void* in1_data,
     // If last dimension just copy twice.
     if (outer_size == 1)
     {
-        cuda::copy_gpu_to_gpu(out_data                      , in0_data, widthBytes0);
-        cuda::copy_gpu_to_gpu((char*)out_data + widthBytes0 , in1_data, widthBytes1);
+        cuda_methods::copy_gpu_to_gpu(out_data                      , in0_data, widthBytes0);
+        cuda_methods::copy_gpu_to_gpu((char*)out_data + widthBytes0 , in1_data, widthBytes1);
     }
     // Else do 2D memcpy instead.
     else
@@ -4313,7 +4546,7 @@ void kernel_ops::shaped_add(void* out_data, const void* in0_data, const void* in
     case RegularOpDescriptor::SQUEEZE:
     {
         // First copy input 0 to output.
-        cuda::copy_gpu_to_gpu(out_data, in0_data, desc.num_out * sizeof(float));
+        cuda_methods::copy_gpu_to_gpu(out_data, in0_data, desc.num_out * sizeof(float));
 
         // Then run summation addition kernel.
         CUDA_LAUNCH(squeeze_add_dim<BLOCK>, (unsigned)desc.num_out, BLOCK,
@@ -4507,7 +4740,7 @@ void kernel_ops::shaped_subtract(void* out_data, const void* in0_data, const voi
     case RegularOpDescriptor::SQUEEZE:
     {
         // First copy input 0 to output.
-        cuda::copy_gpu_to_gpu(out_data, in0_data, desc.num_out * sizeof(float));
+        cuda_methods::copy_gpu_to_gpu(out_data, in0_data, desc.num_out * sizeof(float));
 
         // Then run subtraction addition kernel.
         CUDA_LAUNCH(squeeze_subtract_dim<BLOCK>, (unsigned)desc.num_out, BLOCK,
@@ -4701,7 +4934,7 @@ void kernel_ops::shaped_multiply(void* out_data, const void* in0_data, const voi
     case RegularOpDescriptor::SQUEEZE:
     {
         // First copy input 0 to output.
-        cuda::copy_gpu_to_gpu(out_data, in0_data, desc.num_out * sizeof(float));
+        cuda_methods::copy_gpu_to_gpu(out_data, in0_data, desc.num_out * sizeof(float));
 
         // Then run summation addition kernel.
         CUDA_LAUNCH(squeeze_multiply_dim<BLOCK>, (unsigned)desc.num_out, BLOCK,
@@ -4895,7 +5128,7 @@ void kernel_ops::shaped_divide(void* out_data, const void* in0_data, const void*
     case RegularOpDescriptor::SQUEEZE:
     {
         // First copy input 0 to output.
-        cuda::copy_gpu_to_gpu(out_data, in0_data, desc.num_out * sizeof(float));
+        cuda_methods::copy_gpu_to_gpu(out_data, in0_data, desc.num_out * sizeof(float));
 
         // Then run summation addition kernel.
         CUDA_LAUNCH(squeeze_divide_dim<BLOCK>, (unsigned)desc.num_out, BLOCK,

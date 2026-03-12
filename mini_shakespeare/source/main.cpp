@@ -66,5 +66,6 @@ void random_speak_default()
 
 int main()
 {
-	train_shakespeare()
+	//speak();
+	train_shakespeare();
 }

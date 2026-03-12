@@ -63,10 +63,10 @@ void Tensor::internal_multiply(const float* val, bool gpu, float factor)
 	}
 }
 
-// The tensor values are set using a floating value stored in a pointer times a factor.
+// The tensor values are filled using a floating value stored in a pointer times a factor.
 // The pointer can be a CUDA pointer to avoid the need for synchronization or data transfers.
 
-void Tensor::internal_set(const float* val, bool gpu, float factor)
+void Tensor::internal_fill(const float* val, bool gpu, float factor)
 {
 	MACROGRAD_CHECK(is_init(),
 		"Trying to internally set an empty tensor."
@@ -229,11 +229,11 @@ void Tensor::internal_set_value(const Shape& route, float value)
 	);
 
 	float* ptr = internal_data();
-	for (unsigned d = 0; d < dim(); d++)
+	for (unsigned d = 0; d < route.dim(); d++)
 		ptr += ((route[d] + _view[d] * (2 - route[d] / _view[d])) % _view[d]) * _stride[d];
 
 	if (is_gpu())
-		cuda::copy_cpu_to_gpu(ptr, &value, sizeof(float));
+		cuda_methods::copy_cpu_to_gpu(ptr, &value, sizeof(float));
 
 	else
 		*ptr = value;
@@ -256,13 +256,13 @@ float Tensor::internal_get_value(const Shape& route) const
 	const float* ptr = internal_data();
 
 	// Compute pointer rout.
-	for (unsigned d = 0; d < dim(); d++)
+	for (unsigned d = 0; d < route.dim(); d++)
 		ptr += ((route[d] + _view[d] * (2 - route[d] / _view[d])) % _view[d]) * _stride[d];
 
 	if (is_gpu())
 	{
 		float val;
-		cuda::copy_gpu_to_cpu(&val, ptr, sizeof(float));
+		cuda_methods::copy_gpu_to_cpu(&val, ptr, sizeof(float));
 		return val;
 	}
 	else
@@ -296,7 +296,7 @@ void Tensor::internal_set_vector(const Shape& route, const float* values)
 		_data_size *= _view[i];
 
 	if (is_gpu())
-		cuda::copy_cpu_to_gpu(internal_data() + idx, values, _data_size);
+		cuda_methods::copy_cpu_to_gpu(internal_data() + idx, values, _data_size);
 
 	else
 		memcpy(internal_data() + idx, values, _data_size);

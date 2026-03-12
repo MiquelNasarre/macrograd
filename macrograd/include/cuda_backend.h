@@ -63,6 +63,13 @@
 class MemPool
 {
 	MemPool() = delete;
+
+	// Initial release threshold.
+	static constexpr float initial_release_threshold = 0.9f;
+
+	// Sets initial release threshold on device.
+	static void init_threshold();
+
 public:
 	// Get your free GPU memory here! Freshly zeroed!
 	static void* allocate(size_t byte_size);
@@ -71,9 +78,9 @@ public:
 	static void free(void* data_ptr);
 };
 
-// cuda namespace: Contains basic CUDA utilities used by the library, such as device
-// transfers, memory zeroing, and stream synchronization.
-namespace cuda
+// cuda namespace: Contains basic CUDA utilities used by the library, such 
+// as device transfers, memory zeroing, and stream synchronization.
+namespace cuda_methods
 {
 	// Sets the data to zero for the specified byte size.
 	void zero_data(void* data_ptr, size_t byte_size);

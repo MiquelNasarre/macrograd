@@ -280,14 +280,14 @@ VectorInt VectorInt::to(const char* device) const
 	if (_internals->_is_gpu)
 	{
 		if (out._internals->_is_gpu)
-			cuda::copy_gpu_to_gpu(out.data(), data(), _length * sizeof(int));
+			cuda_methods::copy_gpu_to_gpu(out.data(), data(), _length * sizeof(int));
 		else
-			cuda::copy_gpu_to_cpu(out.data(), data(), _length * sizeof(int));
+			cuda_methods::copy_gpu_to_cpu(out.data(), data(), _length * sizeof(int));
 	}
 	else
 	{
 		if (out._internals->_is_gpu)
-			cuda::copy_cpu_to_gpu(out.data(), data(), _length * sizeof(int));
+			cuda_methods::copy_cpu_to_gpu(out.data(), data(), _length * sizeof(int));
 		else
 			memcpy(out.data(), data(), _length * sizeof(int));
 	}
@@ -386,7 +386,7 @@ int VectorInt::get(int i) const
 
 	int idx = mod(i, (int)_length);
 	int val;
-	if (is_gpu()) cuda::copy_gpu_to_cpu(&val, data() + idx, sizeof(int));
+	if (is_gpu()) cuda_methods::copy_gpu_to_cpu(&val, data() + idx, sizeof(int));
 	else val = data()[idx];
 
 	return val;
@@ -403,7 +403,7 @@ void VectorInt::set(int i, int val)
 
 	int idx = mod(i, (int)_length);
 
-	if (is_gpu()) cuda::copy_cpu_to_gpu(data() + idx, &val, sizeof(int));
+	if (is_gpu()) cuda_methods::copy_cpu_to_gpu(data() + idx, &val, sizeof(int));
 	else data()[idx] = val;
 }
 
@@ -430,14 +430,14 @@ void VectorInt::set(int a, int b, const int* values, bool is_gpu_ptr)
 	if (is_gpu())
 	{
 		if (is_gpu_ptr)
-			cuda::copy_gpu_to_gpu(data() + idx_a, values, (idx_b - idx_a) * sizeof(int));
+			cuda_methods::copy_gpu_to_gpu(data() + idx_a, values, (idx_b - idx_a) * sizeof(int));
 		else
-			cuda::copy_cpu_to_gpu(data() + idx_a, values, (idx_b - idx_a) * sizeof(int));
+			cuda_methods::copy_cpu_to_gpu(data() + idx_a, values, (idx_b - idx_a) * sizeof(int));
 	}
 	else
 	{
 		if (is_gpu_ptr)
-			cuda::copy_gpu_to_cpu(data() + idx_a, values, (idx_b - idx_a) * sizeof(int));
+			cuda_methods::copy_gpu_to_cpu(data() + idx_a, values, (idx_b - idx_a) * sizeof(int));
 		else
 			memcpy(data() + idx_a, values, (idx_b - idx_a) * sizeof(int));
 	}
@@ -479,7 +479,7 @@ VectorInt VectorInt::copy() const
 	VectorInt out(_length, _internals->_device);
 
 	if (_internals->_is_gpu)
-		cuda::copy_gpu_to_gpu(out.data(), data(), _length * sizeof(int));
+		cuda_methods::copy_gpu_to_gpu(out.data(), data(), _length * sizeof(int));
 	else
 		memcpy(out.data(), data(), _length * sizeof(int));
 
@@ -541,14 +541,14 @@ Tensor Tensor::internal_copy(bool with_grad, bool copy_grad) const
 	Tensor out(_view, device(), with_grad);
 
 	if (is_gpu())
-		cuda::copy_gpu_to_gpu(out.internal_data(), internal_data(), data_size());
+		cuda_methods::copy_gpu_to_gpu(out.internal_data(), internal_data(), data_size());
 	else
 		memcpy(out.internal_data(), internal_data(), data_size());
 
 	if (with_grad && has_grad() && copy_grad && _internals->gradient)
 	{
 		if (is_gpu())
-			cuda::copy_gpu_to_gpu(out.internal_gradient().internal_data(), gradient().internal_data(), data_size());
+			cuda_methods::copy_gpu_to_gpu(out.internal_gradient().internal_data(), gradient().internal_data(), data_size());
 		else
 			memcpy(out.internal_gradient().internal_data(), gradient().internal_data(), data_size());
 	}
@@ -570,13 +570,13 @@ Tensor Tensor::to(const char* device, bool with_grad) const
 	// Distinguish different cases.
 	if (out.is_gpu())
 	{
-		if (is_gpu())	cuda::copy_gpu_to_gpu(out_data, ten_data, _data_size);
-		else			cuda::copy_cpu_to_gpu(out_data, ten_data, _data_size);
+		if (is_gpu())	cuda_methods::copy_gpu_to_gpu(out_data, ten_data, _data_size);
+		else			cuda_methods::copy_cpu_to_gpu(out_data, ten_data, _data_size);
 	}
 	else
 	{
-		if (is_gpu())	cuda::copy_gpu_to_cpu(out_data, ten_data, _data_size);
-		else						   memcpy(out_data, ten_data, _data_size);
+		if (is_gpu())	cuda_methods::copy_gpu_to_cpu(out_data, ten_data, _data_size);
+		else						           memcpy(out_data, ten_data, _data_size);
 	}
 
 	// If both have gradient copy it too.
@@ -587,13 +587,13 @@ Tensor Tensor::to(const char* device, bool with_grad) const
 
 		if (out.is_gpu())
 		{
-			if (is_gpu())	cuda::copy_gpu_to_gpu(out_grad, ten_grad, _data_size);
-			else			cuda::copy_cpu_to_gpu(out_grad, ten_grad, _data_size);
+			if (is_gpu())	cuda_methods::copy_gpu_to_gpu(out_grad, ten_grad, _data_size);
+			else			cuda_methods::copy_cpu_to_gpu(out_grad, ten_grad, _data_size);
 		}
 		else
 		{
-			if (is_gpu())	cuda::copy_gpu_to_cpu(out_grad, ten_grad, _data_size);
-			else						   memcpy(out_grad, ten_grad, _data_size);
+			if (is_gpu())	cuda_methods::copy_gpu_to_cpu(out_grad, ten_grad, _data_size);
+			else						           memcpy(out_grad, ten_grad, _data_size);
 		}
 	}
 
@@ -725,7 +725,7 @@ float Tensor::item() const
 	if (is_gpu())
 	{
 		float val;
-		cuda::copy_gpu_to_cpu(&val, _internals->_data, sizeof(float));
+		cuda_methods::copy_gpu_to_cpu(&val, _internals->_data, sizeof(float));
 		return val;
 	}
 	else return *internal_data();
@@ -813,7 +813,7 @@ const char* Tensor::array_str(const char* fmt) const
 		if (is_gpu())
 		{
 			float val;
-			cuda::copy_gpu_to_cpu(&val, internal_data() + idx, sizeof(float));
+			cuda_methods::copy_gpu_to_cpu(&val, internal_data() + idx, sizeof(float));
 			s_print(fmt, val);
 		}
 		else
@@ -894,7 +894,7 @@ void Tensor::backward()
 
 	// First set your gradient to 1.
 	if (_internals->is_gpu)
-		cuda::set_to_one(internal_gradient().internal_data());
+		cuda_methods::set_to_one(internal_gradient().internal_data());
 	else
 		internal_gradient().internal_data()[0] = 1.f;
 
@@ -925,7 +925,7 @@ void Tensor::zero_grad()
 
 	// Do changes on GPU tensors.
 	if (_internals->is_gpu)
-		cuda::zero_data(internal_gradient().internal_data(), data_size());
+		cuda_methods::zero_data(internal_gradient().internal_data(), data_size());
 
 	// Zero the gradient on the CPU.
 	else

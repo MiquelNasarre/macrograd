@@ -44,6 +44,9 @@
  
  - Initialization: Contains tensor initialization functions, currently supporting normal and uniform
    distributions.
+
+ - Cuda: This namespace contains multiple end user functions to customize and inspect CUDA behavior
+   during runtime.
  
  Feel free to explore the header and read the comments to better understand how tensors are meant to be
  used and how to build neural networks with them. The code is well commented and explains how the
@@ -294,6 +297,43 @@ namespace Initialization
 	void uniform(Tensor& tensor, float min = 0.f, float max = 1.f);
 }
 
+// Cuda namespace: This namespace contains multiple end user functions to customize and inspect CUDA behavior
+// during runtime. Including device properties, memory thresholds, etc. Index -1 signals current device.
+namespace Cuda
+{
+	// Returns whether a CUDA device is available for usage.
+	bool is_available();
+
+	// Returns the number of CUDA devices available.
+	int device_count();
+
+	// Returns the memory capacity of the specified device.
+	unsigned long long device_memory(int device_idx = -1);
+
+	// Returns a string containing the specified device name.
+	const char* device_name(int device_idx = -1);
+
+	// Sets the maximum allocated memory the memory pool is allowed to reserve. Memory will still
+	// overflow if operations are bigger than the threshold. Defaults to 0.9, if your training uses 
+	// a higher fraction of the total GPU memory consider increasing this threshold.
+	void set_release_threshold(float fraction, int device_idx = -1);
+
+	// Return the idx of the current device used by the library.
+	int current_device();
+
+	// Sets the device to be used by the library.
+	void set_device(int device_idx);
+
+	// Synchronizes the current CUDA stream with the CPU runtime.
+	void synchronize();
+
+	// Returns the memory being reserved by the default memory pool.
+	unsigned long long reserved_memory(int device_idx = -1);
+
+	// Returns the memory being actively used by the library.
+	unsigned long long used_memory(int device_idx = -1);
+}
+
 /* TENSOR CLASS
 --------------------------------------------------------------------------------------------------------------------------
 --------------------------------------------------------------------------------------------------------------------------
@@ -522,9 +562,9 @@ public:
 	// The tensor values get multiplied by a floating value stored in a pointer times a factor. 
 	// The pointer can be a CUDA pointer to avoid the need for synchronization or data transfers.
 	void internal_multiply(const float* val, bool gpu = false, float factor = 1.f);
-	// The tensor values are set using a floating value stored in a pointer times a factor.
+	// The tensor values are filled using a floating value stored in a pointer times a factor.
 	// The pointer can be a CUDA pointer to avoid the need for synchronization or data transfers.
-	void internal_set(const float* val, bool gpu = false, float factor = 1.f);
+	void internal_fill(const float* val, bool gpu = false, float factor = 1.f);
 
 	// Adds the other tensor's values to this, numel must match, does not support gradient.
 	void internal_add(const Tensor& other);

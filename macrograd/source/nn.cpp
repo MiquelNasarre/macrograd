@@ -185,7 +185,7 @@ void Module::save_weights(const char* path) const
 			void* buffer = ::operator new[](ten.data_size(), std::align_val_t(64));
 
 			// Copy memory to buffer.
-			cuda::copy_gpu_to_cpu(buffer, ten.internal_data(), ten.data_size());
+			cuda_methods::copy_gpu_to_cpu(buffer, ten.internal_data(), ten.data_size());
 
 			// Dump it to file.
 			write(buffer, ten.data_size());
@@ -283,7 +283,7 @@ void Module::load_weights(const char* path)
 			read(buffer, ten.data_size());
 
 			// Copy buffer to CUDA tensor memory.
-			cuda::copy_cpu_to_gpu(ten.internal_data(), buffer, ten.data_size());
+			cuda_methods::copy_cpu_to_gpu(ten.internal_data(), buffer, ten.data_size());
 
 			// Free the buffer.
 			::operator delete[](buffer, std::align_val_t(64));
