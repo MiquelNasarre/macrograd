@@ -314,7 +314,7 @@ namespace Cuda
 	const char* device_name(int device_idx = -1);
 
 	// Sets the maximum allocated memory the memory pool is allowed to reserve. Memory will still
-	// overflow if operations are bigger than the threshold. Defaults to 0.9, if your training uses 
+	// overflow if operations are bigger than the threshold. Defaults to 0.8, if your training uses 
 	// a higher fraction of the total GPU memory consider increasing this threshold.
 	void set_release_threshold(float fraction, int device_idx = -1);
 

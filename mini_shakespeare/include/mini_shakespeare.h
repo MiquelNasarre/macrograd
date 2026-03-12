@@ -26,7 +26,7 @@
 
  If you want to play with the model yourself, use the native function Module::load_weights() with the
  'my_shakespeare.mg' weights file provided. Then call the class function add_one_character() with a
- string of your own. The main file has a basic speaking function defined. I hope you have fun with it :)
+ string of your own. The main file has a basic writing function defined. I hope you have fun with it :)
 --------------------------------------------------------------------------------------------------------------------------
 --------------------------------------------------------------------------------------------------------------------------
 */
@@ -57,7 +57,7 @@ private:
 	static constexpr unsigned n_heads  = 2;
 	static constexpr unsigned emb_dim  = 64;
 	static constexpr unsigned ff_dim   = 256;
-	static constexpr unsigned context  = 512;
+	static constexpr unsigned context  = 256;
 
 	// Variable temperature for generation.
 	float temperature = 1.0f;

@@ -1,7 +1,9 @@
 #include "mini_shakespeare.h"
 #include "training.h"
 
-struct SpeechGuidance
+// Give your literary indications
+// to mini Shakespeare here!
+struct EditorialGuidance
 {
 	size_t seed         = 200994;
 	float temperature   = 0.75f;
@@ -10,7 +12,9 @@ struct SpeechGuidance
 	char device[16]     = "cuda";
 };
 
-void speak(SpeechGuidance desc = {})
+// Basic writing function, takes a descriptor 
+// as input and lets mini Shakespare write!
+void write(EditorialGuidance desc = {})
 {
 	// Set random seed.
 	Random::set_seed(desc.seed);
@@ -41,8 +45,11 @@ void speak(SpeechGuidance desc = {})
 	delete[] his_words;
 }
 
-void random_speak_default()
+// Simple function for deterministic 
+// seeded writing on the console.
+void random_writing_default()
 {
+	// Mixer function for deterministic seed.
 	auto splitmix = [](size_t _seed)
 	{
 		_seed += 0x9E3779B97F4A7C15ull;
@@ -52,20 +59,26 @@ void random_speak_default()
 		return _seed;
 	};
 
+	// Provide a starting seed.
 	printf("This shall provide our start: ");
-	char seed[256] = {};
-	scanf_s(" %255s", &seed, 256);
+	char buffer[256] = {};
+	scanf_s(" %255s", &buffer, 256);
 	printf("\n");
-	SpeechGuidance desc = {};
-	size_t number = 4343252;
+
+	// Generate random seed from input.
+	size_t seed = 0;
 	for (unsigned i = 0; i < 256; i++)
-		number = splitmix(number + (size_t)seed[i]);
-	desc.seed = number;
-	speak(desc);
+		seed = splitmix(seed + (size_t)buffer[i]);
+
+	// Let Shakespeare write.
+	EditorialGuidance desc = { seed };
+	write(desc);
 }
 
+// Main function.
 int main()
 {
-	//speak();
-	train_shakespeare();
+	random_writing_default();
+	//train_shakespeare();
+	return 0;
 }

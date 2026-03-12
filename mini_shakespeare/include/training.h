@@ -12,7 +12,7 @@
 --------------------------------------------------------------------------------------------------------------------------
 --------------------------------------------------------------------------------------------------------------------------
  My Mini Shakespeare's first ever words were:
- "aJPO fu,)j:!3p PJpasj& FJp,ASJa !:asJ APJF ai j'fiJA FahRja !sjf ."
+ "Ar,i :bHmvoF!qIA?J,&spsRJDTJoTojv-HrgDGUdIWhVDDYPwTA! hAmQb;-iERMKjqf,vBvmgWbsee"
 
  Although those words looked beautiful to me, no one else really seemed to like them, so training
  time it is. But how are you supposed to train a transformer to write Shakespeare?
@@ -99,15 +99,15 @@ struct ShakespeareTrainingDesc
 	char save_path[128]	  = "my_shakespeare.mg";
 	int warmup_steps      = 300;
 	int total_steps       = 10000;
-	int log_every         = 10;
+	int log_every         = 50;
 	int batch_size        = 128;
-	int micro_batch_size  = 16;
-	int context_lentgh    = 512;
+	int micro_batch_size  = 32;
+	int context_lentgh    = 256;
 	float train_split	  = 0.9f;
 	int eval_micro_batch  = 8;
-	float initial_lr      = 0.002f;
-	float final_lr        = 0.0002f;
-	float weight_decay    = 0.0f;
+	float initial_lr      = 0.001f;
+	float final_lr        = 0.0001f;
+	float weight_decay    = 0.01f;
 };
 
 // Helper function to generate batches for the training run. It generates random numbers for

@@ -65,7 +65,7 @@ class MemPool
 	MemPool() = delete;
 
 	// Initial release threshold.
-	static constexpr float initial_release_threshold = 0.9f;
+	static constexpr float initial_release_threshold = 0.8f;
 
 	// Sets initial release threshold on device.
 	static void init_threshold();
