@@ -5,10 +5,12 @@
 # Build Outputs
 lib/
 bin/
-.intermediate/
 
 # VisualStudid
 .vs/
+
+# CMake Cache
+.cmake/
 
 # Big data blobs
 data/

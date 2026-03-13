@@ -52,7 +52,7 @@
 #include <math.h>
 
 // Path for the tiny_shakespeare dataset.
-#define TINY_SHAKESPEARE_PATH DATA_PATH "tiny_shakespeare/tiny_shakespeare.txt"
+#define TINY_SHAKESPEARE_PATH "data/tiny_shakespeare/tiny_shakespeare.txt"
 
 // Simple static class to handle the loading of tiny_shakespeare.
 class TinyDataset
@@ -96,7 +96,8 @@ struct ShakespeareTrainingDesc
 {
 	char device[16]       = "cuda";
 	char load_path[128]   = "";
-	char save_path[128]	  = "my_shakespeare.mg";
+	char save_path[128]	  = "aprentice.mg";
+	char log_path[128]	  = "training_log.txt";
 	int warmup_steps      = 300;
 	int total_steps       = 10000;
 	int log_every         = 50;
@@ -237,9 +238,22 @@ static void train_shakespeare(ShakespeareTrainingDesc desc = {})
 			}
 
 			// Log to console.
-			float validation_loss = val_loss.item();
+			float validation_loss = val_loss.item(), training_loss = accum_loss.item() / desc.log_every;
 			printf("Finished Step %04i | Learning Rate: %.6f | Train Loss: %.4f | Validation Loss: %.4f\n", 
-				step, optimizer.learning_rate(), accum_loss.item() / desc.log_every, validation_loss);
+				step, optimizer.learning_rate(), training_loss, validation_loss);
+
+			// Log to text file.
+			if (desc.log_path[0] != '\0')
+			{
+				FILE* log_file = nullptr;
+				fopen_s(&log_file, desc.log_path, "a");
+				MACROGRAD_CHECK(log_file,
+					"Unable to open log file with path \"%s\"", desc.log_path
+				);
+				fprintf_s(log_file, "Finished Step %04i | Learning Rate: %.6f | Train Loss: %.4f | Validation Loss: %.4f\n",
+					step, optimizer.learning_rate(), training_loss, validation_loss);
+				fclose(log_file);
+			}
 
 			// If new best validation loss save weights.
 			if (desc.save_path[0] != '\0' && validation_loss < best_validation)

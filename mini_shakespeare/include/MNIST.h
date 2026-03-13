@@ -33,10 +33,10 @@
 
 // Paths for the MNIST files.
 
-#define MNIST_TRAINING_IMAGES_PATH DATA_PATH "MNIST/train-images.idx3-ubyte"
-#define MNIST_TRAINING_LABELS_PATH DATA_PATH "MNIST/train-labels.idx1-ubyte"
-#define MNIST_TESTING_IMAGES_PATH DATA_PATH "MNIST/t10k-images.idx3-ubyte"
-#define MNIST_TESTING_LABELS_PATH DATA_PATH "MNIST/t10k-labels.idx1-ubyte"
+#define MNIST_TRAINING_IMAGES_PATH "data/MNIST/train-images.idx3-ubyte"
+#define MNIST_TRAINING_LABELS_PATH "data/MNIST/train-labels.idx1-ubyte"
+#define MNIST_TESTING_IMAGES_PATH "data/MNIST/t10k-images.idx3-ubyte"
+#define MNIST_TESTING_LABELS_PATH "data/MNIST/t10k-labels.idx1-ubyte"
 
 // Simple static class to handle the loading of the MNIST dataset. It stores the datset 
 // directly as tensors of size (50k, IMAGE_DIM) and (10k, IMAGE_DIM). And stores the 
