@@ -77,6 +77,50 @@ public:
 	}
 };
 
+// Dropout module class. Consists of a module that applies dropout depending on the its
+// current mode. Does not contain any internal parameters. It applies it by generating
+// a random mask for each element of the tensor every call.
+class Dropout : public Module
+{
+private:
+    // Internal storage for the dropout rate.
+    float _rate;
+
+public:
+    // Dropout module constructor. Initializes the dropout rate to the specified value.
+    Dropout(float rate) { set_rate(rate); }
+
+    // Updates the internal dropout rate.
+    void set_rate(float rate) 
+    { 
+        // Sanity check.
+        MACROGRAD_CHECK(rate >= 0.f && rate < 1.f,
+            "Invalid dropout rate received inside a Dropout module.\n"
+            "Expected a value between 0 and 1 but got: %.4f", rate
+        );
+        // Set rate.
+        _rate = rate; 
+    }
+
+    // Dropout module forward pass. If th module is on training mode it creates a random
+    // mask with the specified droppout proportion and applies it to the input tensor.
+    Tensor forward(const Tensor& in) const override
+    {
+        // If on evaluation mode return input.
+        if (is_eval() || _rate == 0.f)
+            return in;
+
+        // Prepare the dropout mask with same shape.
+        Tensor mask(in.shape(), in.device(), false);
+
+        // Initialize it with random uniform distribution from 0 to 1.
+        Initialization::uniform(mask);
+
+        // Apply the mask to the input tensor and return.
+        return in * ((mask >= _rate) / (1.0f - _rate));
+    }
+};
+
 // Feed Forward module class. Consists of two linear layers with a GELU operation as the 
 // non-linearity. Used after MHSA inside the transformer layer. Applies a simple MLP 
 // transformation to each token individually.
@@ -280,21 +324,24 @@ private:
     FeedForward feed_forward;
     LayerNorm attn_norm;
     LayerNorm ff_norm;
+    Dropout dropout;
 
 public:
     // Transformer Layer module constructor. Takes as input the dimensions and initializes
     // its modules accordingly. Adds all modules to the internal parameter list.
-    Layer(unsigned n_heads, unsigned emb_dim, unsigned ff_dim) :
+    Layer(unsigned n_heads, unsigned emb_dim, unsigned ff_dim, float dropout_rate) :
         attention{ n_heads, emb_dim },
-        attn_norm{ emb_dim },
         feed_forward{ emb_dim, ff_dim },
-        ff_norm{ emb_dim }
+        attn_norm{ emb_dim },
+        ff_norm{ emb_dim },
+        dropout{ dropout_rate }
     {
         // Add all modules to the list.
         add_module(attention);
         add_module(attn_norm);
         add_module(feed_forward);
         add_module(ff_norm);
+        add_module(dropout);
     }
 
     // Sets mask for its attention block. Used during upcoming forward 
@@ -310,13 +357,13 @@ public:
         Tensor attn_out = attention(layer_in); // (B, L, E)
 
         // Add residual and layer normalize.
-        Tensor ff_in = attn_norm(attn_out + layer_in); // (B, L, E)
+        Tensor ff_in = attn_norm(dropout(attn_out) + layer_in); // (B, L, E)
 
         // feed forward.
         Tensor ff_out = feed_forward(ff_in); // (B, L, E)
 
         // Add residual and layer normalize.
-        Tensor out = ff_norm(ff_out + ff_in); // (B, L, E)
+        Tensor out = ff_norm(dropout(ff_out) + ff_in); // (B, L, E)
 
         // Return output.
         return out; // (B, L, E)
@@ -337,7 +384,7 @@ private:
 public:
     // Transformer Stack module constructor. Takes the transformer dimensions as input 
     // and initializes the layers accordingly. Adds all layers to the parameter list.
-    Transformer(unsigned num_layers, unsigned n_heads, unsigned emb_dim, unsigned ff_dim)
+    Transformer(unsigned num_layers, unsigned n_heads, unsigned emb_dim, unsigned ff_dim, float dropout_rate)
     {
         // Allocate space for the layers.
         n_layers = num_layers;
@@ -346,7 +393,7 @@ public:
         // Initialize layers and add to parameter list.
         for (unsigned i = 0; i < n_layers; i++)
         {
-            layer[i] = new Layer(n_heads, emb_dim, ff_dim);
+            layer[i] = new Layer(n_heads, emb_dim, ff_dim, dropout_rate);
             add_module(*layer[i]);
         }
     }

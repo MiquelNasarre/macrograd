@@ -54,9 +54,9 @@ private:
 
 	// Global constant model dimensions.
 	static constexpr unsigned n_layers = 6;
-	static constexpr unsigned n_heads  = 2;
-	static constexpr unsigned emb_dim  = 64;
-	static constexpr unsigned ff_dim   = 256;
+	static constexpr unsigned n_heads  = 4;
+	static constexpr unsigned emb_dim  = 128;
+	static constexpr unsigned ff_dim   = 512;
 	static constexpr unsigned context  = 256;
 
 	// Variable temperature for generation.
@@ -65,8 +65,8 @@ public:
 
 	// My Mini Shakespeare constructor. Creates a new Mini Shakespeare model.
 	// This one cannot write yet; it will need some training or a load file.
-	MiniShakespeare() :
-		transformer{ n_layers, n_heads, emb_dim, ff_dim },
+	MiniShakespeare(float training_dropout = 0.0f) :
+		transformer{ n_layers, n_heads, emb_dim, ff_dim, training_dropout },
 		embedding{ Tokenizer::num_tokens, emb_dim },
 		pos{ context, emb_dim }
 	{

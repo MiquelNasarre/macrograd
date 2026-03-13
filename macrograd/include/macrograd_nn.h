@@ -58,8 +58,14 @@ private:
 	unsigned _parameter_count = 0;	// Stores the module's paramenter count.
 	Tensor** _parameters = nullptr;	// Stores a pointer to the module's parameters.
 
+	unsigned _submodule_count = 0;	// Stores the module's submodule count.
+	Module** _submodules = nullptr; // Stores a pointer to the module's submodules.
+
 	// Whether the parameters require gradient.
 	bool _requires_grad = true;
+
+	// Whether the module is on evaluation mode.
+	bool _eval_mode = false;
 
 	// Device where the parameters are stored.
 	char _device[16] = "cpu";
@@ -71,8 +77,8 @@ protected:
 	// Default protected constructor, creates an empty list.
 	Module() = default;
 
-	// Default protected destructor, deletes the parameter list.
-	virtual ~Module() { if (_parameters) delete[] _parameters; }
+	// Default protected destructor, deletes parameter and submodule lists.
+	virtual ~Module();
 
 	// Registers a submodule inside this module. Any modules contained inside 
 	// the class must be registered using this function. The parameters of 
@@ -88,6 +94,10 @@ public:
 	// Whether the module's parameters have gradient enabled.
 	virtual bool has_grad() const { return _requires_grad; }
 
+	// Whether the module is on evaluation mode. Can also be used by 
+	// module internals to adapt their methods to the modules mode.
+	bool is_eval() const { return _eval_mode; }
+
 	// Disables gradients for all parameters in the module. Forward
 	// passes executed afterwards will not create a gradient tree.
 	virtual void no_grad();
@@ -95,6 +105,14 @@ public:
 	// Enables gradients for all parameters in the module. Forward
 	// passes executed afterwards will create a gradient tree.
 	virtual void with_grad();
+
+	// Sets the module to evaluation mode. This flag is propagated across
+	// submodules and can be used to cause changes in model behavior.
+	void eval();
+
+	// Sets the module to training mode. This flag is propagated across
+	// submodules and can be used to cause changes in model behavior.
+	void train();
 
 	// Sets all parameter gradients to zero.
 	void zero_grad();

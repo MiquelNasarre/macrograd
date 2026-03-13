@@ -101,13 +101,14 @@ struct ShakespeareTrainingDesc
 	int total_steps       = 10000;
 	int log_every         = 50;
 	int batch_size        = 128;
-	int micro_batch_size  = 32;
+	int micro_batch_size  = 16;
 	int context_lentgh    = 256;
 	float train_split	  = 0.9f;
-	int eval_micro_batch  = 8;
+	int eval_micro_batch  = 16;
 	float initial_lr      = 0.001f;
-	float final_lr        = 0.0001f;
+	float final_lr        = 0.0002f;
 	float weight_decay    = 0.01f;
+	float dropout_rate    = 0.15f;
 };
 
 // Helper function to generate batches for the training run. It generates random numbers for
@@ -156,7 +157,7 @@ static void train_shakespeare(ShakespeareTrainingDesc desc = {})
 	const VectorInt validation_data = tokenized_dataset.subset(int(desc.train_split * tokenized_dataset.len()), 0);
 
 	// Initialize the model, send it to device and load its weights.
-	MiniShakespeare shakespeare; shakespeare.to(desc.device);
+	MiniShakespeare shakespeare(desc.dropout_rate); shakespeare.to(desc.device);
 	if (desc.load_path[0] != '\0')
 	{
 		shakespeare.load_weights(desc.load_path);
@@ -182,7 +183,7 @@ static void train_shakespeare(ShakespeareTrainingDesc desc = {})
 	for (int step = 1; step < desc.total_steps + 1; step++)
 	{
 		// Training step use gradient.
-		shakespeare.with_grad();
+		shakespeare.with_grad(); shakespeare.train();
 		{
 			// Zero gradients.
 			optimizer.zero_grad();
@@ -221,8 +222,8 @@ static void train_shakespeare(ShakespeareTrainingDesc desc = {})
 			// Tensor for validation loss.
 			Tensor val_loss({ 1 }, desc.device, false);
 
-			// Make sure we do not use gradient for validation.
-			shakespeare.no_grad();
+			// Make sure we do not use gradient or dropout for validation.
+			shakespeare.no_grad(); shakespeare.eval();
 			for (int micro_step = 0; micro_step < desc.eval_micro_batch; micro_step++)
 			{
 				// Generate random eval batch.

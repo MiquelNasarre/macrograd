@@ -78,7 +78,7 @@ void random_writing_default()
 // Main function.
 int main()
 {
-	random_writing_default();
-	//train_shakespeare();
+	//random_writing_default();
+	train_shakespeare();
 	return 0;
 }

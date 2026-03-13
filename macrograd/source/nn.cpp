@@ -12,15 +12,56 @@
 --------------------------------------------------------------------------------------------------------------------------
 */
 
+// Default protected destructor, deletes parameter and submodule lists.
+
+Module::~Module()
+{
+	if (_parameters) delete[] _parameters;
+	if (_submodules) delete[] _submodules;
+}
+
 // Registers a submodule inside this module. Any modules contained inside 
 // the class must be registered using this function. The parameters of 
 // the submodule are appended to this module's internal parameter list.
 
 void Module::add_module(Module& module)
 {
+	// Self reference not allowed.
+	if (&module == this) return;
+
+	// State sinchronize.
+	_requires_grad ? module.with_grad() : module.no_grad();
+	_eval_mode	   ? module.eval()		: module.train();
+
+	// Ensure same device.
+	if (strcmp(module.device(), device()) != 0) 
+		module.to(device());
+
 	// Add the parameters to your list.
 	for (unsigned i = 0; i < module._parameter_count; i++)
 		add_parameter(*module._parameters[i]);
+
+	// Create new submodules list.
+	Module** new_submodules = new Module*[_submodule_count + module._submodule_count + 1];
+
+	// Copy all submodules to new list.
+	for (unsigned i = 0; i < _submodule_count; i++)
+		new_submodules[i] = _submodules[i];
+
+	// Copy all submodules of submodule to list.
+	for (unsigned i = 0; i < module._submodule_count; i++)
+		new_submodules[i + _submodule_count] = module._submodules[i];
+
+	// Add new submodule to list.
+	new_submodules[_submodule_count + module._submodule_count] = &module;
+
+	// Update count.
+	_submodule_count += module._submodule_count + 1;
+
+	// Delete old list, store new one.
+	if (_submodules)
+		delete[] _submodules;
+	_submodules = new_submodules;
 }
 
 // Registers a tensor as a parameter of the module. Only tensors
@@ -34,9 +75,13 @@ void Module::add_parameter(Tensor& tensor)
 		"An empty tensor can not be a parameter.\n"
 		"Make sure your tensors are properly initialized before adding them as parameters."
 	);
-	// Force gradient into the tensor.
-	if (_requires_grad)
-		tensor = tensor.with_grad();
+
+	// State sinchronization.
+	tensor = _requires_grad ? tensor.with_grad() : tensor.no_grad();
+
+	// Ensure same device.
+	if (strcmp(tensor.device(), device()) != 0) 
+		tensor = tensor.to(device());
 
 	// Create new tensor list.
 	Tensor** new_parameters = new Tensor*[_parameter_count + 1];
@@ -60,6 +105,9 @@ void Module::no_grad()
 	for (unsigned i = 0; i < _parameter_count; i++)
 		*_parameters[i] = _parameters[i]->no_grad();
 
+	for (unsigned i = 0; i < _submodule_count; i++)
+		_submodules[i]->_requires_grad = false;
+
 	_requires_grad = false;
 }
 
@@ -71,7 +119,36 @@ void Module::with_grad()
 	for (unsigned i = 0; i < _parameter_count; i++)
 		*_parameters[i] = _parameters[i]->with_grad();
 
+	for (unsigned i = 0; i < _submodule_count; i++)
+		_submodules[i]->_requires_grad = true;
+
 	_requires_grad = true;
+}
+
+// Sets the module to evaluation mode. This flag is propagated across
+// submodules and can be used to cause changes in model behavior.
+
+void Module::eval()
+{
+	// Set yourself to evaluation mode.
+	_eval_mode = true;
+
+	// Propagate to all submodules.
+	for (unsigned i = 0; i < _submodule_count; i++)
+		_submodules[i]->_eval_mode = true;
+}
+
+// Sets the module to training mode. This flag is propagated across
+// submodules and can be used to cause changes in model behavior.
+
+void Module::train()
+{
+	// Set yourself to training mode.
+	_eval_mode = false;
+
+	// Propagate to all submodules.
+	for (unsigned i = 0; i < _submodule_count; i++)
+		_submodules[i]->_eval_mode = false;
 }
 
 // Sets all parameter gradients to zero.
@@ -88,6 +165,9 @@ void Module::to(const char* device)
 {
 	for (unsigned i = 0; i < _parameter_count; i++)
 		*_parameters[i] = _parameters[i]->to(device, true);
+
+	for (unsigned i = 0; i < _submodule_count; i++)
+		strcpy_s(_submodules[i]->_device, 16, device);
 
 	strcpy_s(_device, 16, device);
 }
