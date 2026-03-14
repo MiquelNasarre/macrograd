@@ -469,7 +469,7 @@ public:
 
 	// Shape constructor, creates a new tensor with the specified shape 
 	// on the provided device and with gradient if specified.
-	Tensor(const Shape& shape, const char* device = "cpu", bool requires_grad = false);
+	explicit Tensor(const Shape& shape, const char* device = "cpu", bool requires_grad = false);
 	
 	// Reduces the instance count of the internal data by one.
 	~Tensor() { reduce_instances_count(); }
@@ -559,12 +559,20 @@ public:
 	// The tensor values are incremented by a floating value stored in a pointer times a factor.
 	// The pointer can be a CUDA pointer to avoid the need for synchronization or data transfers.
 	void internal_add(const float* val, bool gpu = false, float factor = 1.f);
+	// The tensor values are incremented by a floating value.
+	void internal_add(float val) { internal_add(&val); }
+
 	// The tensor values get multiplied by a floating value stored in a pointer times a factor. 
 	// The pointer can be a CUDA pointer to avoid the need for synchronization or data transfers.
 	void internal_multiply(const float* val, bool gpu = false, float factor = 1.f);
+	// The tensor values get multiplied by a floating value.
+	void internal_multiply(float val) { internal_multiply(&val); }
+
 	// The tensor values are filled using a floating value stored in a pointer times a factor.
 	// The pointer can be a CUDA pointer to avoid the need for synchronization or data transfers.
 	void internal_fill(const float* val, bool gpu = false, float factor = 1.f);
+	// The tensor values are filled using a floating value.
+	void internal_fill(float val) { internal_fill(&val); }
 
 	// Adds the other tensor's values to this, numel must match, does not support gradient.
 	void internal_add(const Tensor& other);

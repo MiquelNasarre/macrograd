@@ -22,7 +22,7 @@
  dependencies for tokenization.
 
  This model, coupled with the training header, represents the official demo of Macrograd, having trained
- this small model to achieve a validation loss of (...working on it...), which I am quite proud of.
+ this small model to achieve a validation loss of 1.4954, which I am quite proud of.
 
  If you want to play with the model yourself, use the native function Module::load_weights() with the
  'my_shakespeare.mg' weights file provided. Then call the class function add_one_character() with a
@@ -108,9 +108,10 @@ public:
 	VectorInt add_one_token(const VectorInt& tokens)
 	{
 		bool had_grad = has_grad();
+		bool was_eval = is_eval();
 
-		// Disable gradients.
-		no_grad();
+		// Disable gradients and dropout.
+		no_grad(); eval();
 
 		// Make sure it does not exceed context length.
 		VectorInt context_tokens = (tokens.len() > context) ? tokens.subset(-(int)context, 0) : tokens;
@@ -150,8 +151,9 @@ public:
 		out.set(0, (int)tokens.len(), tokens.data(), tokens.is_gpu());
 		out.set(-1, 0, new_token.data(), new_token.is_gpu());
 
-		// Reset gradients if they were previously enabled.
+		// Reset gradients and dropout if they were previously enabled.
 		if (had_grad) with_grad();
+		if (!was_eval) train();
 
 		// Return output.
 		return out;

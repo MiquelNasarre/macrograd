@@ -53,7 +53,8 @@ public:
         // Create matrix of shape (fan_in, fan_out).
 		matrix = Tensor(Shape{ fan_in, fan_out });
         // Initialize with Xavier uniform.
-        Initialization::uniform(matrix, -sqrtf(6.f / (fan_in + fan_out)), sqrtf(6.f / (fan_in + fan_out)));
+        float xavier = sqrtf(6.f / (fan_in + fan_out));
+        Initialization::uniform(matrix, -xavier, xavier);
         // Add matrix to the parameter list.
 		add_parameter(matrix);
 

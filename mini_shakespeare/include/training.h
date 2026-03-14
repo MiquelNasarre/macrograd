@@ -108,8 +108,8 @@ struct ShakespeareTrainingDesc
 	int eval_micro_batch  = 16;
 	float initial_lr      = 0.001f;
 	float final_lr        = 0.0002f;
-	float weight_decay    = 0.01f;
-	float dropout_rate    = 0.15f;
+	float weight_decay    = 0.05f;
+	float dropout_rate    = 0.20f;
 };
 
 // Helper function to generate batches for the training run. It generates random numbers for
