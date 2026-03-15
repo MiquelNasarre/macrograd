@@ -2955,14 +2955,12 @@ __global__ void transpose_last2_kernel_vec(float* __restrict__ out, const float*
                 tile[ty + j][tx] = in[base + y * B + x];
         }
         // Out of bounds: only need to write the locations we might read later.
-        // We can just guard scalar stores; vector lanes will be skipped by the y/x checks.
         else if (tx / 4 != 0 || x + 3 >= B) tile[ty + j][tx] = 0.0f;
     }
 
     __syncthreads();
 
     // Store transposed tile to output.
-    // Output matrix shape is B x A.
     #pragma unroll
     for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS)
     {
@@ -2977,28 +2975,25 @@ template<int TILE_DIM, int BLOCK_ROWS>
 __global__ void transpose_kernel_vec(float* __restrict__ out, const float* __restrict__ in, int A, int B, 
     size_t outer_size, size_t middle_size, size_t inner_size, size_t in_stride, size_t out_stride)
 {
-    // Flatten (outer,middle) into a single batch index.
+    // Flatten into a single batch index.
     const int batch = (int)blockIdx.z;
     if (batch >= outer_size * middle_size) return;
 
     const int outter = batch / middle_size;
     const int middle = batch % middle_size;
 
-    // Base offsets for this (outer,middle) batch
+    // Base offsets for this batch
     const int in_base = outter * in_stride * A + middle * inner_size * B;
     const int out_base = outter * out_stride * B + middle * inner_size * A;
 
-    // 2D tile indices in the (dim0, dim1) plane
-    const int x0 = (int)blockIdx.x * TILE_DIM; // along dim1 (B)
-    const int y0 = (int)blockIdx.y * TILE_DIM; // along dim0 (A)
+    // 2D tile indices in the plane
+    const int x0 = (int)blockIdx.x * TILE_DIM; // along dim1
+    const int y0 = (int)blockIdx.y * TILE_DIM; // along dim0
 
     const int tx = (int)threadIdx.x;  // [0..31]
     const int ty = (int)threadIdx.y;  // [0..BLOCK_ROWS-1]
 
-    // Vectorized: copy float4 packets along the inner dimension.
-    // We still tile across (dim0, dim1) using shared memory transpose.
-
-    // Using float4 shared tile; +1 column padding to reduce bank conflicts.
+    // Using float4 shared tile.
     __shared__ float4 tile4[TILE_DIM][TILE_DIM + 1];
 
     const size_t inner4 = inner_size / 4; // number of float4 packets
@@ -3028,8 +3023,8 @@ __global__ void transpose_kernel_vec(float* __restrict__ out, const float* __res
         #pragma unroll
         for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS)
         {
-            const int yT = x0 + ty + j; // becomes dim0 in output (was dim1)
-            const int xT = y0 + tx;     // becomes dim1 in output (was dim0)
+            const int yT = x0 + ty + j; // becomes dim0 in output
+            const int xT = y0 + tx;     // becomes dim1 in output
 
             if (xT < A && yT < B)
                 *(float4*)(out + out_base + yT * out_stride + xT * inner_size + p4 * 4) = tile4[tx][ty + j];
@@ -3042,20 +3037,20 @@ template<int TILE_DIM, int BLOCK_ROWS>
 __global__ void transpose_kernel(float* __restrict__ out, const float* __restrict__ in, int A, int B, 
     size_t outer_size, size_t middle_size, size_t inner_size, size_t in_stride, size_t out_stride)
 {
-    // Flatten (outer,middle) into a single batch index.
+    // Flatten into a single batch index.
     const int batch = (int)blockIdx.z;
     if (batch >= outer_size * middle_size) return;
 
     const int outter = batch / middle_size;
     const int middle = batch % middle_size;
 
-    // Base offsets for this (outer,middle) batch
+    // Base offsets for this batch
     const int in_base = outter * in_stride * A + middle * inner_size * B;
     const int out_base = outter * out_stride * B + middle * inner_size * A;
 
-    // 2D tile indices in the (dim0, dim1) plane
-    const int x0 = (int)blockIdx.x * TILE_DIM; // along dim1 (B)
-    const int y0 = (int)blockIdx.y * TILE_DIM; // along dim0 (A)
+    // 2D tile indices in the plane
+    const int x0 = (int)blockIdx.x * TILE_DIM; // along dim1
+    const int y0 = (int)blockIdx.y * TILE_DIM; // along dim0
 
     const int tx = (int)threadIdx.x;  // [0..31]
     const int ty = (int)threadIdx.y;  // [0..BLOCK_ROWS-1]

@@ -78,59 +78,7 @@ void random_writing_default()
 // Main function.
 int main()
 {
-	//random_writing_default();
-	//return 0;
-
-	// Define an input dataset, in this case a 4x4 matrix.
-	float data[4][4] =
-	{
-		{ +0.2f, +1.0f, +0.2f, -2.0f },
-		{ +0.5f, -1.1f, +1.4f, +2.0f },
-		{ +0.2f, -1.4f, +0.7f, -2.0f },
-		{ +3.0f, +1.0f, -2.1f, -1.2f },
-	};
-	// Define a target output.
-	float target[4] = { +1.3f, -2.5f, +0.2f, -0.1f };
-
-	// Create a tensor with the data.
-	Tensor data_tensor(Shape{ 4, 4 }, "cpu");
-	data_tensor.internal_set_vector({ 0 }, data[0]);
-	data_tensor.internal_set_vector({ 1 }, data[1]);
-	data_tensor.internal_set_vector({ 2 }, data[2]);
-	data_tensor.internal_set_vector({ 3 }, data[3]);
-	// Create a tensor with the target.
-	Tensor target_tensor(Shape{ 4 }, "cpu");
-	target_tensor.internal_set_vector({}, target);
-
-	// Create the tensor you want to train. Zero initializes.
-	Tensor parameters(Shape{ 4 }, "cpu", true /*requires grad*/);
-
-	// Repeat 10 epoch.
-	for (int epoch = 0; epoch < 100; epoch++)
-	{
-		// Compute forward pass.
-		Tensor preds = Functional::matmul(data_tensor, parameters);
-		// Compute loss.
-		Tensor loss = Functional::mean_squared_error(preds, target_tensor);
-
-		// Backpropagate.
-		parameters.zero_grad();
-		loss.backward();
-		// Gradient descent.
-		const float learning_rate = 0.1f;
-		parameters.internal_add(-learning_rate * parameters.gradient());
-
-		// Log loss.
-		printf("Epoch %i Finished | Loss: %.4f\n", epoch, loss.item());
-	}
-	// Print final output.
-	printf("\nFinal Parameters:\n%s\n", parameters.str());
-
-
-	return 0;
-
-
-	//random_writing_default();
-	train_shakespeare();
+	random_writing_default();
+	//train_shakespeare();
 	return 0;
 }

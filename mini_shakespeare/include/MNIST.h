@@ -74,10 +74,17 @@ private:
 
 		// Open files
 		fopen_s(&training_images_file, MNIST_TRAINING_IMAGES_PATH, "rb");
-		fopen_s(&testing_images_file, MNIST_TESTING_IMAGES_PATH, "rb");
+		fopen_s(&testing_images_file,   MNIST_TESTING_IMAGES_PATH, "rb");
 		fopen_s(&training_labels_file, MNIST_TRAINING_LABELS_PATH, "rb");
-		fopen_s(&testing_labels_file, MNIST_TESTING_LABELS_PATH, "rb");
+		fopen_s(&testing_labels_file,   MNIST_TESTING_LABELS_PATH, "rb");
 
+		// Try project folder instead.
+		if (!training_images_file) fopen_s(&training_images_file, "..\\..\\" MNIST_TRAINING_IMAGES_PATH, "rb");
+		if (!testing_images_file)  fopen_s(&testing_images_file,  "..\\..\\"  MNIST_TESTING_IMAGES_PATH, "rb");
+		if (!training_labels_file) fopen_s(&training_labels_file, "..\\..\\" MNIST_TRAINING_LABELS_PATH, "rb");
+		if (!testing_labels_file)  fopen_s(&testing_labels_file,  "..\\..\\"  MNIST_TESTING_LABELS_PATH, "rb");
+
+		// Sanity check
 		MACROGRAD_CHECK(training_images_file, "[MNIST] Failed to open '%s'\n", MNIST_TRAINING_IMAGES_PATH);
 		MACROGRAD_CHECK(testing_images_file, "[MNIST] Failed to open '%s'\n", MNIST_TESTING_IMAGES_PATH);
 		MACROGRAD_CHECK(training_labels_file, "[MNIST] Failed to open '%s'\n", MNIST_TRAINING_LABELS_PATH);

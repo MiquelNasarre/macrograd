@@ -69,6 +69,10 @@ private:
 
 		FILE* f = nullptr; 
 		fopen_s(&f, TINY_SHAKESPEARE_PATH, "rb");
+		// Try project folder instead.
+		if (!f) fopen_s(&f, "..\\..\\" TINY_SHAKESPEARE_PATH, "rb");
+
+		// Sanity check.
 		MACROGRAD_CHECK(f != nullptr,
 			"Unable to load file \"%s\"", TINY_SHAKESPEARE_PATH
 		);
@@ -96,14 +100,14 @@ struct ShakespeareTrainingDesc
 {
 	char device[16]       = "cuda";
 	char load_path[128]   = "";
-	char save_path[128]	  = "aprentice.mg";
+	char save_path[128]	  = "apprentice.mg";
 	char log_path[128]	  = "training_log.txt";
 	int warmup_steps      = 300;
 	int total_steps       = 10000;
 	int log_every         = 50;
 	int batch_size        = 128;
 	int micro_batch_size  = 16;
-	int context_lentgh    = 256;
+	int context_length    = 256;
 	float train_split	  = 0.9f;
 	int eval_micro_batch  = 16;
 	float initial_lr      = 0.001f;
@@ -121,11 +125,11 @@ static void generateBatch(const ShakespeareTrainingDesc& desc, const VectorInt& 
 	for (int i = 0; i < desc.micro_batch_size; i++)
 	{
 		// Generate random number.
-		int rand = Random::rand_int(0, dataset.len() - desc.context_lentgh - 1);
+		int rand = Random::rand_int(0, dataset.len() - desc.context_length - 1);
 
 		// Append the tokens selected to the input and output lists.
-		model_input[i] = dataset.subset(rand, rand + desc.context_lentgh);
-		output.set(i * desc.context_lentgh, (i + 1) * desc.context_lentgh, dataset.data() + rand + 1, dataset.is_gpu());
+		model_input[i] = dataset.subset(rand, rand + desc.context_length);
+		output.set(i * desc.context_length, (i + 1) * desc.context_length, dataset.data() + rand + 1, dataset.is_gpu());
 	}
 }
 
@@ -177,7 +181,7 @@ static void train_shakespeare(ShakespeareTrainingDesc desc = {})
 	// Prepare vectors and tensors for the training run.
 	Tensor accum_loss({ 1 }, desc.device, false);
 	VectorInt* model_input = new VectorInt[desc.micro_batch_size];
-	VectorInt output_tokens(desc.context_lentgh * desc.micro_batch_size, desc.device);
+	VectorInt output_tokens(desc.context_length * desc.micro_batch_size, desc.device);
 	float best_validation = INFINITY;
 
 	// Iterate through all the steps.

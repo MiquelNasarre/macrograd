@@ -296,7 +296,7 @@ public:
         // Sanity check.
         MACROGRAD_CHECK(in.size(-1) == layer_dim,
             "Invalid tensor shape received inside a LayerNorm forward pass.\n"
-            "Expected last dimension %i but got %s",
+            "Expected last dimension of size %i, but got input shape %s.",
             layer_dim, in.shape().str()
         );
 

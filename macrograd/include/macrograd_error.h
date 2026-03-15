@@ -34,6 +34,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 /*
 --------------------------------------------------------------------------------------------------------------------------
@@ -60,13 +61,21 @@ public:
 	// Prints the error information to the console and calls abort.
 	[[noreturn]] void PrintAbort() const
 	{
+		// Find the last dir slash inside file path.
+		const char* slash = strrchr(_file, '/');
+		const char* backslash = strrchr(_file, '\\');
+		const char* last = (slash > backslash) ? slash : backslash;
+
+		// Print error to console.
 		fprintf(stderr,
 			"Macrograd Error Occurred:\n"
 			"Line: %u\n"
 			"File: %s\n"
 			"Message: %s\n",
-			_line, _file, _msg
+			_line, last ? last + 1 : _file, _msg
 		);
+
+		// Terminate process.
 		abort();
 	}
 

@@ -34,13 +34,6 @@ else()
     )
 endif()
 
-# Copy data folder next to executable.
-add_custom_command(TARGET mini_shakespeare POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-            ${CMAKE_CURRENT_SOURCE_DIR}/data
-            $<TARGET_FILE_DIR:mini_shakespeare>/data
-)
-
 # Link to Macrograd library.
 target_link_libraries(mini_shakespeare
     PRIVATE

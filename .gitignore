@@ -12,5 +12,5 @@ bin/
 # CMake Cache
 .cmake/
 
-# Big data blobs
-data/
+# MNIST Data
+MNIST/
